@@ -1,3 +1,28 @@
 .remember/
 .DS_Store
 ~$*
+
+# Data, indexes and model weights live on Drive / Hugging Face, never in git
+data/
+*.parquet
+*.jsonl
+*.faiss
+*.index
+*.npy
+*.safetensors
+*.bin
+*.pt
+checkpoints/
+hf_cache/
+
+# Secrets
+.env
+.git-credentials
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/

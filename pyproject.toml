@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumbr"
+version = "0.1.0"
+description = "Evaluating retrieval strategies and fine-tuning for a RAG assistant over company-internal knowledge (CISC 6000, Group 10)"
+requires-python = ">=3.10"
+# Core deps only. Heavy, track-specific packages (pyserini, faiss, vllm, ragas, ranx)
+# are added as optional extras when each track starts, so the bootstrap stays fast.
+dependencies = [
+    "huggingface_hub>=0.24",
+    "datasets>=2.20",
+    "pandas>=2.0",
+    "pyarrow>=15",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+retrieval = ["sentence-transformers>=3.0", "faiss-cpu", "ranx"]
+train = ["sentence-transformers>=3.0", "accelerate"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
