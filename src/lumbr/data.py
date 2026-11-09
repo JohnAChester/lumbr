@@ -38,7 +38,7 @@ def download_raw(force: bool = False) -> dict[str, Path]:
     out = {}
     for key, remote in FILES.items():
         dst = paths.RAW / _local_name(key)
-        if dst.exists() and not force:
+        if dst.exists() and dst.stat().st_size > 0 and not force:
             print(f"[ok] {key}: already on Drive ({dst.stat().st_size / 1e9:.2f} GB)")
             out[key] = dst
             continue
@@ -50,9 +50,17 @@ def download_raw(force: bool = False) -> dict[str, Path]:
             revision=HF_REVISION,
         )
         print(f"  copying to Drive -> {dst}")
-        shutil.copyfile(tmp, dst)
+        copy_atomic(tmp, dst)
         out[key] = dst
     return out
+
+
+def copy_atomic(src, dst) -> None:
+    """Copy via a temporary name, then rename, so an interrupted copy never looks like a finished file."""
+    dst = Path(dst)
+    part = dst.with_name(dst.name + ".partial")
+    shutil.copyfile(src, part)
+    part.replace(dst)
 
 
 def stage_local(force: bool = False) -> dict[str, Path]:
@@ -65,7 +73,7 @@ def stage_local(force: bool = False) -> dict[str, Path]:
             raise FileNotFoundError(f"{src} missing; run data.download_raw() first.")
         if force or not dst.exists() or dst.stat().st_size != src.stat().st_size:
             print(f"[stage] staging {key} to local disk ...")
-            shutil.copyfile(src, dst)
+            copy_atomic(src, dst)
         out[key] = dst
     return out
 
