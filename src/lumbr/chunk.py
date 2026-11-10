@@ -62,7 +62,12 @@ META_KEYS = {
 def tokenizer(model_id: str):
     from transformers import AutoTokenizer
 
-    return AutoTokenizer.from_pretrained(model_id)
+    tok = AutoTokenizer.from_pretrained(model_id)
+    # We only count tokens here, often of whole sections before they are split, so lift the
+    # model limit to silence the harmless "sequence length is longer than ... (590 > 512)"
+    # warning. The 512 cap is enforced separately (exact_counts / finalize).
+    tok.model_max_length = 10**9
+    return tok
 
 
 def _raw_counts(texts: list[str]) -> list[list[int]]:
