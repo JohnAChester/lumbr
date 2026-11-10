@@ -198,8 +198,13 @@ sys.path.insert(0, str(REPO_DIR / "src"))
 ### Cell 2: project paths + auto-reload
 
 ```python
-%load_ext autoreload
-%autoreload 2          # picks up changes to src/lumbr/*.py without restarting
+# Auto-reload src/lumbr/*.py after a `git pull`. Some Colab runtimes ship an IPython whose
+# autoreload is broken on Python 3.12+ ("No module named 'imp'"); then restart the runtime instead.
+try:
+    get_ipython().run_line_magic("load_ext", "autoreload")
+    get_ipython().run_line_magic("autoreload", "2")
+except Exception:
+    print("[--] autoreload unavailable: restart the runtime after pulling code changes")
 
 from lumbr import paths, data
 paths.ensure_dirs()
@@ -207,7 +212,8 @@ paths.show()
 ```
 
 `autoreload` means that after you `git pull` a teammate's change to `src/lumbr/`, your
-next cell uses the new code.
+next cell uses the new code. On runtimes where it can't load, the cell prints `[--]`
+instead of failing; restart the runtime (Runtime → Restart session) after pulling.
 
 **If `git pull` fails** with "Not possible to fast-forward": you have uncommitted edits in
 `/content/lumbr`. Either commit and push them, or discard them with
