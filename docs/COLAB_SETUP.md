@@ -180,6 +180,7 @@ for k, v in [("credential.helper", "store"),
 
 # Clone on first run; otherwise pull the latest main.
 if REPO_DIR.exists():
+    subprocess.run(["git", "-C", str(REPO_DIR), "checkout", "-q", "main"], check=True)
     subprocess.run(["git", "-C", str(REPO_DIR), "pull"], check=True)
 else:
     subprocess.run(["git", "clone", REPO_URL, str(REPO_DIR)], check=True)

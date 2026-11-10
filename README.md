@@ -22,13 +22,25 @@ in Colab and run it top to bottom.
 ```
 src/lumbr/          shared Python code: import this from notebooks
   paths.py          the one place that defines where data lives (Drive vs. local disk)
-  data.py           download (pinned revision) and load the benchmark
+  data.py           HF release: questions + cross-check copy of the documents (pinned revision)
+  sources.py        structured source JSON from the benchmark's GitHub repo (our source of truth)
+  schema.py         the passage schema: ids, header, validation, JSONL io
+  chunk.py          documents -> passages (<= 512 tokens for both R2 and R3 tokenizers)
+  sample.py         the v0 1K-doc passage sample (#3)
+  survey.py         per-source field survey (#2)
 notebooks/
   00_template.ipynb             copy this to start a new notebook
   00_setup_and_download.ipynb   one-time data download + sanity checks
+  01_john_inspect_sources.ipynb build raw/erb_json.parquet, coverage checks, survey (#2)
+  02_john_chunk_sample.ipynb    build processed/sample_passages.jsonl (#3)
 docs/
   COLAB_SETUP.md    team setup guide
+  SCHEMA.md         passage schema (#1): read this before building on the passages
+  SOURCES.md        per-source findings, metadata mapping, data quirks (#2)
+tests/              pytest (`pip install -e .[dev]`, then `pytest`)
 ```
+
+**Models (D3):** R2 = `BAAI/bge-base-en-v1.5`, R3 = `Qwen/Qwen3-Embedding-4B`, R4 = R2 fine-tuned.
 
 Notebooks are named `NN_<track>_<topic>.ipynb` and each has a single owner.
 

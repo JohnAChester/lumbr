@@ -15,11 +15,13 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=15",
     "tqdm",
+    "transformers>=4.40",   # tokenizers only (chunk token counts); models load in track notebooks
 ]
 
 [project.optional-dependencies]
 retrieval = ["sentence-transformers>=3.0", "faiss-cpu", "ranx"]
 train = ["sentence-transformers>=3.0", "accelerate"]
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
