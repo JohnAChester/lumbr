@@ -26,6 +26,8 @@ from lumbr import schema, sources
 TARGET_TOKENS = 350   # pack up to about this many tokens (including header)
 TAIL_MIN = 50         # a final chunk smaller than this is merged into the previous one
 TITLE_MAX_CHARS = 150 # titles are cut to this length (see short_title)
+CARRY_MAX = 60        # tokens of the previous chunk repeated at the start of the next (conversational sources)
+CARRY_SOURCES = {"slack", "gmail", "fireflies"}
 PLAUSIBLE_YEARS = (2020, 2029)  # the company's timeline; dates outside this are generator noise
 _EPOCH_MIN = datetime(PLAUSIBLE_YEARS[0], 1, 1, tzinfo=timezone.utc).timestamp()
 _EPOCH_MAX = datetime(PLAUSIBLE_YEARS[1], 12, 31, tzinfo=timezone.utc).timestamp()
@@ -36,10 +38,18 @@ MAIN_FIELDS = {"description", "body", "content", "text", "messages", "thread", "
                "transcript", "emails", "content_continued"}
 
 SPEAKER = re.compile(r"^\s*(\[[\d:]+\]\s*)?[A-Za-z@][\w.'’()\-@ ]{0,40}?:\s")
+# Fireflies transcripts also write timestamps without brackets (16% of transcripts): `09:00 Lena:`,
+# `00:00:02 - Ava:`, `05:41 - 06:25 Aisha:`, plus `[00:00] [00:05] Name:` and `[S00:18] Name:`.
+# Transcripts only: in Slack the looser pattern matches log/agenda lines (`11:02:11 runtime(us-west): ...`).
+_TS = r"\d{1,2}:\d{2}(?::\d{2})?"
+TRANSCRIPT_SPEAKER = re.compile(
+    r"^\s*(?:(?:\[S?[\d:]+\]\s*)+|" + _TS + r"(?:\s*[-–—]\s*" + _TS + r")?\s+(?:[-–—]\s+)?)?"
+    r"[A-Za-z@][\w.'’()\-@ ]{0,40}?:\s")
 EMAIL_START = re.compile(r"\n(?=From: )")
 # "-----MESSAGE 1-----", "--- Message 1 of 4 ---"
 MESSAGE_MARKER = re.compile(r"^\s*-{3,}\s*MESSAGE\s+\d+[^\n]{0,20}?-{3,}\s*$", re.M | re.I)
 QUOTE_INTRO = re.compile(r"^\s*(On .{5,200}wrote:|-{2,}\s*Original Message\s*-{2,})\s*$", re.I)
+QUOTE_STUB = "[quoted reply removed"  # closed with "]" or ": On ... wrote]"
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
 
 # (channel, author, date, created) keys per source, in fallback order. See docs/SOURCES.md.
@@ -159,19 +169,20 @@ def metadata(doc: dict, source: str) -> dict:
 @dataclass
 class Unit:
     text: str
-    n: int = 0          # tokens without specials
-    speaker: str | None = None
+    n: int = 0                 # tokens without specials
+    label: str | None = None   # list/dict field this unit belongs to, e.g. "Acceptance criteria"
+    starts_field: bool = True  # False for a list item (or split piece) after the field's first one
 
 
 def _humanize(field: str) -> str:
     return field.replace("_", " ").strip().capitalize()
 
 
-def split_speaker_lines(text: str) -> list[str]:
+def split_speaker_lines(text: str, speaker: re.Pattern = SPEAKER) -> list[str]:
     """A new unit starts at each `Name: ...` / `[mm:ss] Name: ...` line; other lines continue it."""
     units, cur = [], []
     for line in text.split("\n"):
-        if SPEAKER.match(line) and cur:
+        if speaker.match(line) and cur:
             units.append("\n".join(cur).strip())
             cur = []
         cur.append(line)
@@ -200,12 +211,19 @@ def strip_quoted_reply(email: str) -> str:
     """Remove the quoted copy of earlier emails (`On ... wrote:` / `Original Message` and `>` lines).
 
     Forwarded messages are kept: their content does not appear elsewhere in the thread.
+    Each removed quote leaves a one-line stub, so a reply like "Thursday works" still shows it
+    answers someone: `[quoted reply removed: On <date>, <sender> wrote]` or `[quoted reply removed]`.
     """
     kept = []
     for line in email.split("\n"):
-        if QUOTE_INTRO.match(line):
-            break  # everything after the quote intro is the quoted copy
+        intro = QUOTE_INTRO.match(line)
+        if intro:  # everything after the quote intro is the quoted copy
+            on = intro.group(1).strip()
+            kept.append(f"{QUOTE_STUB}: {on.rstrip(':').strip()}]" if on.lower().startswith("on ") else f"{QUOTE_STUB}]")
+            break
         if line.lstrip().startswith(">"):
+            if not kept or kept[-1] != f"{QUOTE_STUB}]":
+                kept.append(f"{QUOTE_STUB}]")
             continue
         kept.append(line)
     return "\n".join(kept).strip()
@@ -225,21 +243,30 @@ def _emails(value) -> list[str]:
 
 def render_units(doc: dict, source: str) -> list[str]:
     """The document's body as an ordered list of natural units (plain strings)."""
-    units: list[str] = []
+    return [u.text for u in _render(doc, source)]
+
+
+def _render(doc: dict, source: str) -> list[Unit]:
+    """Units with their list-field label, so a chunk that starts mid-list can repeat it."""
+    units: list[Unit] = []
     for field, value in sources.content_fields(doc):
         if source == "gmail" and field in MAIN_FIELDS:
             parts = _emails(value)
         elif source == "slack" or (source == "fireflies" and field == "transcript"):
-            parts = split_speaker_lines(clean_text(value if isinstance(value, str) else "\n".join(map(str, value))))
+            parts = split_speaker_lines(clean_text(value if isinstance(value, str) else "\n".join(map(str, value))),
+                                        SPEAKER if source == "slack" else TRANSCRIPT_SPEAKER)
         elif isinstance(value, list):
             parts = [f"- {clean_text(x)}".strip() for x in map(str, value) if str(x).strip()]
         elif isinstance(value, dict):
             parts = [f"{k}: {clean_text(str(v))}" for k, v in value.items()]
         else:
             parts = split_blocks(clean_text(str(value)))
+        label = None
         if parts and field not in MAIN_FIELDS:
             parts[0] = f"{_humanize(field)}:\n{parts[0]}"
-        units.extend(parts)
+            if isinstance(value, (list, dict)):
+                label = _humanize(field)
+        units.extend(Unit(p, label=label, starts_field=(i == 0)) for i, p in enumerate(parts))
     return units
 
 
@@ -283,7 +310,12 @@ def pack(units: list[Unit], budget: int, target: int) -> list[list[Unit]]:
     """Greedy packing. Never exceeds `budget`; starts a new chunk once `target` would be passed."""
     flat: list[Unit] = []
     for u in units:
-        flat.extend(_split_oversized(u.text, u.n, budget) if u.n > budget else [u])
+        if u.n <= budget:
+            flat.append(u)
+            continue
+        for i, piece in enumerate(_split_oversized(u.text, u.n, budget)):
+            piece.label, piece.starts_field = u.label, u.starts_field and i == 0
+            flat.append(piece)
     chunks: list[list[Unit]] = []
     cur: list[Unit] = []
     cur_n = 0
@@ -301,15 +333,73 @@ def pack(units: list[Unit], budget: int, target: int) -> list[list[Unit]]:
     return chunks
 
 
+# ---------------------------------------------------------------- context carry + continued labels
+
+def _boundaries(text: str) -> list[int]:
+    """Offsets where a line or a sentence starts (never 0)."""
+    starts = {i + 1 for i, ch in enumerate(text) if ch == "\n"}
+    starts |= {m.end() for m in SENTENCE_END.finditer(text)}
+    return sorted(s for s in starts if 0 < s < len(text) and text[s:].strip())
+
+
+def carry_of(group: list[Unit]) -> tuple[str, str | None]:
+    """The end of a chunk to repeat at the start of the next: (text, its list label or None).
+
+    The most whole units (turns, emails, messages) that fit in CARRY_MAX tokens; if even the last
+    one is too long, its longest tail of whole lines/sentences that fits; else nothing.
+    The text is always an exact suffix of the chunk's own content, so `drop_carry` can find it.
+    """
+    k = 0
+    total = 0
+    for u in reversed(group):
+        if total + u.n > CARRY_MAX:
+            break
+        total += u.n
+        k += 1
+    while k:  # unit counts are estimates; confirm on the joined text
+        text = "\n".join(u.text for u in group[-k:])
+        if count([text])[0] <= CARRY_MAX:
+            return text, group[-k].label
+        k -= 1
+    last = group[-1]
+    tails = list(dict.fromkeys(last.text[s:].lstrip() for s in _boundaries(last.text)[-12:]))
+    for tail, n in zip(tails, count(tails)):  # longest first
+        if n <= CARRY_MAX:
+            return tail, last.label
+    return "", None
+
+
+def continued_label(u: Unit) -> str | None:
+    """`Acceptance criteria (continued):` when a chunk starts partway through a list field."""
+    return f"{u.label} (continued):" if u.label and not u.starts_field else None
+
+
+def drop_carry(prev_body: str, body: str) -> str:
+    """`body` without the context carried over from `prev_body` (for merging neighbours, D16).
+
+    A `... (continued):` label line is kept. Bodies without a carry are returned unchanged.
+    """
+    head = ""
+    if body.split("\n", 1)[0].endswith("(continued):") and "\n" in body:
+        head, body = body.split("\n", 1)
+        head += "\n"
+    best = 0
+    for i, ch in enumerate(body[: len(prev_body) + 1]):
+        if ch == "\n" and i and prev_body.endswith(body[:i]):
+            best = i
+    return head + (body[best + 1:] if best else body)
+
+
 # ---------------------------------------------------------------- documents -> passages
 
 def chunk_document(doc: dict, source: str | None = None) -> list[dict]:
     """Chunk one JSON document. Returns schema dicts with chunk_idx/n_chunks/passage_id still unset."""
     source = source or doc["_source_type"]
     meta = metadata(doc, source)
-    texts = render_units(doc, source)
-    if not texts:
+    units = _render(doc, source)
+    if not units:
         return []
+    texts = [u.text for u in units]
     if source == "slack":  # thread starter = first speaker
         m = SPEAKER.match(texts[0])
         if m:
@@ -321,33 +411,47 @@ def chunk_document(doc: dict, source: str | None = None) -> list[dict]:
             meta["author"] = (name if name and "@" not in name else (addr or name).split("@")[0]) or None
     header = schema.make_header(source, meta["title"], meta["channel"], meta["author"], meta["date"])
     n_header = count([header])[0]
-    budget = schema.MAX_TOKENS - SPECIAL - n_header
-    target = max(TAIL_MIN, TARGET_TOKENS - SPECIAL - n_header)
-    units = [Unit(t, c) for t, c in zip(texts, count(texts))]
+    # Own content is packed with room left for the carry (conversational sources) so that
+    # carry + own content still lands near TARGET_TOKENS and never past the cap.
+    reserve = CARRY_MAX + 1 if source in CARRY_SOURCES else 0
+    budget = schema.MAX_TOKENS - SPECIAL - n_header - reserve
+    target = max(TAIL_MIN, TARGET_TOKENS - SPECIAL - n_header - reserve)
+    for u, c in zip(units, count(texts)):
+        u.n = c
 
     def bodies(groups):
-        return ["\n".join(u.text for u in g) for g in groups]
+        out = []
+        for i, g in enumerate(groups):
+            own = [u.text for u in g]
+            label = continued_label(g[0])
+            carry, carry_label = carry_of(groups[i - 1]) if i and reserve else ("", None)
+            if label and carry and carry_label == g[0].label:
+                parts = [label, carry] + own   # the carried items belong to the same list
+            else:
+                parts = ([carry] if carry else []) + ([label] if label else []) + own
+            out.append("\n".join(parts))
+        return out
 
     groups = pack(units, budget, target)
-    exact = exact_counts([schema.join_text(header, b) for b in bodies(groups)])
-    # Packing counts are conservative but not exact for Qwen's BPE; re-pack any chunk that is over.
-    for _ in range(5):
-        over = [i for i, n in enumerate(exact) if n > schema.MAX_TOKENS]
-        if not over:
+    # Packing counts are conservative but not exact for Qwen's BPE (and continued labels are not
+    # budgeted); re-pack any chunk that is over. Carries depend on the previous chunk, so all
+    # bodies are rebuilt each round.
+    for attempt in range(6):
+        bs = bodies(groups)
+        exact = exact_counts([schema.join_text(header, b) for b in bs])
+        over = {i: n for i, n in enumerate(exact) if n > schema.MAX_TOKENS}
+        if not over or attempt == 5:  # finalize() raises if anything is still over
             break
-        new_groups, new_exact = [], []
-        for i, (g, n) in enumerate(zip(groups, exact)):
+        new_groups = []
+        for i, g in enumerate(groups):
             if i not in over:
                 new_groups.append(g)
-                new_exact.append(n)
                 continue
-            tighter = budget - (n - schema.MAX_TOKENS) - 8
-            sub = pack(g, tighter, min(target, tighter))
-            new_groups.extend(sub)
-            new_exact.extend(exact_counts([schema.join_text(header, b) for b in bodies(sub)]))
-        groups, exact = new_groups, new_exact
+            tighter = budget - (over[i] - schema.MAX_TOKENS) - 8
+            new_groups.extend(pack(g, tighter, min(target, tighter)))
+        groups = new_groups
     out = []
-    for body, n in zip(bodies(groups), exact):
+    for body, n in zip(bs, exact):
         out.append({"doc_id": doc["dataset_doc_uuid"], "source": source, **meta, "n_tokens": n,
                     "header": header, "body": body, "text": schema.join_text(header, body)})
     return out
