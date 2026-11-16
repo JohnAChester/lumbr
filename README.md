@@ -27,6 +27,7 @@ src/lumbr/          shared Python code: import this from notebooks
   schema.py         the passage schema: ids, header, validation, JSONL io
   chunk.py          documents -> passages (<= 512 tokens for both R2 and R3 tokenizers)
   sample.py         the v0 1K-doc passage sample (#3)
+  subsample.py      which docs get indexed: gold + BM25/R2 look-alikes + random fill (#5)
   passages.py       the full passage file for the subsample, resumable (#4)
   survey.py         per-source field survey (#2)
 notebooks/
@@ -34,6 +35,9 @@ notebooks/
   00_setup_and_download.ipynb   one-time data download + sanity checks
   01_john_inspect_sources.ipynb build raw/erb_json.parquet, coverage checks, survey (#2)
   02_john_chunk_sample.ipynb    build processed/sample_passages.jsonl (#3)
+  04_john_subsample_bm25.ipynb  BM25 look-alikes for the subsample, CPU (#5)
+  05_john_subsample_r2.ipynb    R2 look-alikes + assemble splits/subsample_doc_ids.txt, GPU (#5)
+splits/             committed ID lists: subsample_doc_ids.txt + manifest (#5)
   03_john_full_passages.ipynb   build processed/passages.jsonl (#4)
 docs/
   COLAB_SETUP.md    team setup guide
