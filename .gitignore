@@ -28,3 +28,9 @@ __pycache__/
 .venv/
 venv/
 .ipynb_checkpoints/
+
+# Brainstorm mockups (visual companion)
+.superpowers/
+
+# Playwright MCP screenshots/logs
+.playwright-mcp/
