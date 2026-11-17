@@ -252,7 +252,8 @@ def _render(doc: dict, source: str) -> list[Unit]:
     for field, value in sources.content_fields(doc):
         if source == "gmail" and field in MAIN_FIELDS:
             parts = _emails(value)
-        elif source == "slack" or (source == "fireflies" and field == "transcript"):
+        elif (source == "slack" or (source == "fireflies" and field == "transcript")) \
+                and isinstance(value, (str, list)):  # numbers/dicts fall through to the generic branches
             parts = split_speaker_lines(clean_text(value if isinstance(value, str) else "\n".join(map(str, value))),
                                         SPEAKER if source == "slack" else TRANSCRIPT_SPEAKER)
         elif isinstance(value, list):

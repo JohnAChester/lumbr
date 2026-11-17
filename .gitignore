@@ -6,6 +6,8 @@
 data/
 *.parquet
 *.jsonl
+# ...except small test fixtures, which are code, not data
+!tests/fixtures/*.jsonl
 *.faiss
 *.index
 *.npy
