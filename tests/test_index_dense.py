@@ -270,3 +270,35 @@ def test_query_strings_match_model_cards_verbatim():
         "Instruct: Given a web search query, retrieve relevant passages that answer the query"
         "\nQuery:What is the capital of France?"
     )
+
+
+# ---------------------------------------------------------------- progress bar
+
+def test_embed_progress_true_does_not_crash(tmp_path):
+    """progress=True must not raise TypeError — tqdm requires total != None for bool()."""
+    passages = _make_passages(10)
+    pfile = tmp_path / "passages.jsonl"
+    _write_passages(passages, pfile)
+    iroot, lroot = tmp_path / "indexes", tmp_path / "local"
+    n = index_dense.embed_passages(
+        pfile, index_dense.R2,
+        index_root=iroot, local_root=lroot,
+        shard_size=10, batch_size=10, progress=True,
+        _model=_FakeModel(),
+    )
+    assert n == 10
+
+
+def test_embed_progress_n_total_skips_line_count(tmp_path):
+    """Passing n_total avoids the extra file scan and still completes correctly."""
+    passages = _make_passages(10)
+    pfile = tmp_path / "passages.jsonl"
+    _write_passages(passages, pfile)
+    iroot, lroot = tmp_path / "indexes", tmp_path / "local"
+    n = index_dense.embed_passages(
+        pfile, index_dense.R2,
+        index_root=iroot, local_root=lroot,
+        shard_size=10, batch_size=10, progress=True, n_total=10,
+        _model=_FakeModel(),
+    )
+    assert n == 10

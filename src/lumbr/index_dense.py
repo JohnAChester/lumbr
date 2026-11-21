@@ -166,6 +166,7 @@ def embed_passages(
     local_root: Path = paths.LOCAL_ROOT,
     shard_size: int = SHARD_PASSAGES,
     batch_size: int = 256,
+    n_total: int | None = None,  # passage count for the progress bar; counted from file if None
     progress: bool = True,
     _model=None,  # inject a fake encoder in tests; None loads the real model
 ) -> int:
@@ -173,6 +174,11 @@ def embed_passages(
 
     Returns the total number of passages encoded (including already-finished ones).
     Safe to re-run after a disconnect: finished shards are skipped automatically.
+
+    Args:
+        n_total: total passage count shown in the progress bar. When None and
+                 progress=True, the file is scanned once to count lines so the bar
+                 displays real ETA. Pass the known count to skip that scan.
     """
     idir = index_dir(config, index_root)
     shard_dir = idir / EMB_SHARD_DIR
@@ -185,14 +191,23 @@ def embed_passages(
         if not shard.with_suffix(".ids").exists():
             shard.unlink()
 
-    done   = _done_ids(shard_dir)
+    done    = _done_ids(shard_dir)
     next_no = _next_shard_no(shard_dir)
-    model  = _model if _model is not None else load_model(config)
+    model   = _model if _model is not None else load_model(config)
 
     bar = None
     if progress:
         from tqdm.auto import tqdm
-        bar = tqdm(unit="passage", desc=f"embed {config.index_tag}")
+        bar_total = n_total
+        if bar_total is None:
+            with open(passages_path, "rb") as _f:
+                bar_total = sum(1 for _ in _f)
+        bar = tqdm(
+            total=bar_total,
+            initial=len(done),
+            unit="passage",
+            desc=f"embed {config.index_tag}",
+        )
 
     buf: list[dict] = []
     total = len(done)
@@ -203,7 +218,7 @@ def embed_passages(
         buf.append(p)
         if len(buf) >= shard_size:
             n = _flush_shard(buf, next_no, shard_dir, local_dir, model, batch_size)
-            if bar:
+            if bar is not None:
                 bar.update(n)
             total += n
             next_no += 1
@@ -211,11 +226,11 @@ def embed_passages(
 
     if buf:
         n = _flush_shard(buf, next_no, shard_dir, local_dir, model, batch_size)
-        if bar:
+        if bar is not None:
             bar.update(n)
         total += n
 
-    if bar:
+    if bar is not None:
         bar.close()
     return total
 
