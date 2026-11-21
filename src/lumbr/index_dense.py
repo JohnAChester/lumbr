@@ -20,6 +20,10 @@ A100 wall-clock (R3, 772 K passages, 227 M tokens):
 
 from __future__ import annotations
 
+import datetime
+import importlib.metadata
+import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -311,3 +315,60 @@ def search(
         [(ids[i], float(s)) for i, s in zip(row_i, row_s) if i >= 0]
         for row_i, row_s in zip(indices, scores)
     ]
+
+
+# ---------------------------------------------------------------- run file I/O
+
+def save_run(
+    run: dict[str, list[tuple[str, float]]],
+    runs_dir: Path,
+    config: ModelConfig,
+    *,
+    split: str = "dev",
+    k: int = 50,
+    date: str | None = None,
+) -> Path:
+    """Save a dense retrieval run + metadata to a dated subfolder of runs_dir.
+
+    Subfolder: `{index_tag}_{split}_{date}` (e.g. `r2_dev_2026-11-21`).
+    Writes:
+      run.json   — passage-level hits (same format as index_bm25.write_run)
+      meta.json  — model, query_prefix, dtype, sentence_transformers version,
+                   git_commit, split, k, date
+
+    Returns the subdir Path.
+    """
+    today = date or datetime.date.today().isoformat()
+    subdir = runs_dir / f"{config.index_tag}_{split}_{today}"
+    subdir.mkdir(parents=True, exist_ok=True)
+
+    run_path = subdir / "run.json"
+    with open(run_path, "w", encoding="utf-8") as f:
+        json.dump(run, f)
+    print(f"[{config.index_tag}] run saved → {run_path}")
+
+    try:
+        st_ver = importlib.metadata.version("sentence-transformers")
+    except importlib.metadata.PackageNotFoundError:
+        st_ver = "unknown"
+
+    git_sha = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip() or "unknown"
+
+    meta = {
+        "retriever":             config.index_tag,
+        "model":                 config.name,
+        "query_prefix":          config.query_prefix,
+        "dtype":                 config.dtype,
+        "split":                 split,
+        "k":                     k,
+        "sentence_transformers": st_ver,
+        "git_commit":            git_sha,
+        "date":                  today,
+    }
+    with open(subdir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+    print(f"[{config.index_tag}] meta  → {subdir / 'meta.json'}")
+    return subdir
