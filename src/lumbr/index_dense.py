@@ -40,19 +40,21 @@ class ModelConfig:
 R2 = ModelConfig(
     name="BAAI/bge-base-en-v1.5",
     index_tag="r2",
-    # BGE model card: passages need no prefix; queries use this instruction.
-    query_prefix="Represent this sentence for searching relevant passages: ",
+    # Source: https://huggingface.co/BAAI/bge-base-en-v1.5
+    # Queries use this instruction; passages need no prefix.
+    query_prefix="Represent this sentence for searching relevant passages:",
     dtype="fp16",
 )
 
 R3 = ModelConfig(
     name="Qwen/Qwen3-Embedding-4B",
     index_tag="r3",
-    # Qwen3-Embedding model card: instruction-based query format.
+    # Source: https://huggingface.co/Qwen/Qwen3-Embedding-4B
+    # Format: f"Instruct: {task}\nQuery:{query}" — no space after "Query:".
     # Passages are encoded without any prefix.
     query_prefix=(
-        "Instruct: Given a question, find relevant text passages that answer the question.\n"
-        "Query: "
+        "Instruct: Given a web search query, retrieve relevant passages that answer the query"
+        "\nQuery:"
     ),
     dtype="bf16",
 )

@@ -256,3 +256,17 @@ def test_r2_and_r3_configs_have_distinct_tags_and_prefixes():
     assert index_dense.R2.query_prefix != index_dense.R3.query_prefix
     assert index_dense.R2.dtype == "fp16"
     assert index_dense.R3.dtype == "bf16"
+
+
+def test_query_strings_match_model_cards_verbatim():
+    # R2: huggingface.co/BAAI/bge-base-en-v1.5 — no trailing space after colon
+    q = "What is the capital of France?"
+    assert index_dense.R2.query_prefix + q == (
+        "Represent this sentence for searching relevant passages:What is the capital of France?"
+    )
+
+    # R3: huggingface.co/Qwen/Qwen3-Embedding-4B — f"Instruct: {task}\nQuery:{query}"
+    assert index_dense.R3.query_prefix + q == (
+        "Instruct: Given a web search query, retrieve relevant passages that answer the query"
+        "\nQuery:What is the capital of France?"
+    )
