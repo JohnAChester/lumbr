@@ -109,20 +109,32 @@ def build_index(
         return
     local_build = local_root / "r1_build"
     local_build.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            sys.executable, "-m", "pyserini.index.lucene",
-            "--collection",  "JsonCollection",
-            "--input",       str(corpus_dir),
-            "--index",       str(local_build),
-            "--generator",   "DefaultLuceneDocumentGenerator",
-            "--threads",     str(threads),
-            "--storePositions",
-            "--storeDocvectors",
-            "--storeRaw",
-        ],
-        check=True,
-    )
+    cmd = [
+        sys.executable, "-m", "pyserini.index.lucene",
+        "--collection",  "JsonCollection",
+        "--input",       str(corpus_dir),
+        "--index",       str(local_build),
+        "--generator",   "DefaultLuceneDocumentGenerator",
+        "--threads",     str(threads),
+        "--storePositions",
+        "--storeDocvectors",
+        "--storeRaw",
+    ]
+    # Stream stderr live (Pyserini/Java logs go there) and keep a rolling tail
+    # so failures surface a readable message instead of a bare non-zero exit code.
+    stderr_tail: list[str] = []
+    with subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True) as proc:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            print(line, end="", flush=True)
+            stderr_tail.append(line.rstrip())
+            if len(stderr_tail) > 30:
+                stderr_tail.pop(0)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"[r1] Pyserini indexer failed (exit {proc.returncode}).\n"
+            + "\n".join(stderr_tail)
+        )
     print(f"[r1] index built locally → {local_build}")
     _copy_index_to_drive(local_build, drive_idx)
     print(f"[r1] index copied to Drive → {drive_idx}")
