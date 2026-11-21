@@ -47,7 +47,7 @@ def category_recall(
         runs: {label: {question_id: [(passage_id, score), ...]}}
         ks:   cutoffs to compute (default: 10 and 50)
 
-    Returns DataFrame with columns: category, n, {label}_recall@{k}, ...
+    Returns DataFrame with columns: category, n, {label}_hit@{k}, ...
     """
     qs = _evaluable_qs(questions_df, split_ids)
     run_docs = {label: ev.passages_to_docs(run) for label, run in runs.items()}
@@ -60,7 +60,7 @@ def category_recall(
                     1 for _, qrow in subset.iterrows()
                     if set(qrow["expected_doc_ids"]) & _top_k_docs(rdocs, str(qrow["question_id"]), k)
                 )
-                row[f"{label}_recall@{k}"] = round(hits / max(len(subset), 1), 4)
+                row[f"{label}_hit@{k}"] = round(hits / max(len(subset), 1), 4)
         return row
 
     rows = []
@@ -157,7 +157,7 @@ def fusion_overlap(
           "{b}_only":      int,  # gold in B@k, not A@k → fusion gain from A
           "neither":       int,
           "total":         int,
-          "oracle_recall": float,  # (both + a_only + b_only) / total
+          "oracle_hit@{k}": float,  # (both + a_only + b_only) / total
           "by_category":   {cat: same dict (without by_category), ...}
         }
     """
@@ -183,7 +183,7 @@ def fusion_overlap(
             f"{label_b}_only":        b_only,
             "neither":                neither,
             "total":                  len(subset),
-            "oracle_recall":          round((both + a_only + b_only) / n, 4),
+            f"oracle_hit@{k}":         round((both + a_only + b_only) / n, 4),
         }
 
     result = _counts(qs)
