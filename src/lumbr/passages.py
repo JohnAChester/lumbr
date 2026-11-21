@@ -1,8 +1,8 @@
 """The full passage file for the indexed subsample (issue #4).
 
 Reads the subsample doc-ID list (#5), chunks those documents with `chunk.chunk_docs`, and
-writes `processed/passages.jsonl` plus a manifest. About 140K docs / 640K passages, a few
-hours on a Colab CPU, so the run is resumable:
+writes `processed/passages.jsonl` plus a manifest. 139,119 docs / 772,960 passages: about 30 min on a
+High-RAM Colab CPU runtime (4+ h estimated on a standard one), so the run is resumable:
 
 - Passages go out in shards of ~SHARD_DOCS documents to Drive `processed/passages_shards/`.
   Each shard is written to local disk first and copied to Drive atomically, so a shard on

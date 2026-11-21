@@ -38,6 +38,9 @@ The Hugging Face release (`data.download_raw()`) is used only for cross-checks.
 Corpus-weighted: **about 4.6 passages per doc**. That makes the full corpus about 2.3M passages, and the ~140K-doc subsample (#5) about 640K passages,
 or about 190M tokens to embed per dense model.
 
+> **Actual (#4, `e4980ad`):** 772,960 passages and 227M tokens for the 139,119-doc subsample, about 21% above this
+> v0 estimate, because Slack, Gmail and Fireflies chunks now reserve room for the context carry.
+
 ## Metadata mapping (D6/D7, implemented in `chunk.META_KEYS`)
 
 | source | channel | author | date (most recent activity) | created |

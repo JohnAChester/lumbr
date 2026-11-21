@@ -11,7 +11,7 @@ One JSON object per line (`.jsonl`, UTF-8). Files on Drive:
 | file | contents |
 |---|---|
 | `lumbr-data/processed/sample_passages.jsonl` | **v0 sample (#3)**: 1,000 docs, ~4.6K passages, 12 MB. Includes every gold doc of 50 questions (listed in `sample_manifest.json`). |
-| `lumbr-data/processed/passages.jsonl` | full subsample (#4): ~140K docs, ~640K passages |
+| `lumbr-data/processed/passages.jsonl` | full subsample (#4): 139,119 docs, 772,960 passages (227M tokens), built at `e4980ad` |
 
 ## Fields
 
