@@ -241,11 +241,15 @@ def embed_passages(
 
 # ---------------------------------------------------------------- index building
 
-def build_index(config: ModelConfig, index_root: Path = paths.INDEXES) -> int:
-    """Concatenate all embedding shards into a FAISS flat-IP index on Drive.
+def load_index(
+    config: ModelConfig,
+    index_root: Path = paths.INDEXES,
+) -> tuple:
+    """Build IndexFlatIP in memory from embedding shards; return (index, passage_ids).
 
-    Requires all shards to have a .ids sidecar (i.e. embed_passages completed).
-    Returns the number of passages indexed.
+    Reads shards in sorted order (same order as build_index), casting fp16 → fp32
+    per shard to cap peak RAM. Verifies the resulting ID list against passage_ids.txt
+    if that file already exists (written by a previous build_index call).
     """
     import faiss
 
@@ -262,21 +266,54 @@ def build_index(config: ModelConfig, index_root: Path = paths.INDEXES) -> int:
         if not ids_file.exists():
             raise ValueError(f"{shard.name} has no .ids sidecar — shard is incomplete.")
         ids = [ln for ln in ids_file.read_text(encoding="utf-8").splitlines() if ln]
-        emb = np.load(shard)
+        emb = np.load(shard).astype(np.float32)   # cast per-shard to cap peak RAM
         if len(ids) != len(emb):
             raise ValueError(f"{shard.name}: {len(emb)} embeddings but {len(ids)} IDs")
         all_ids.extend(ids)
         parts.append(emb)
 
-    matrix = np.concatenate(parts, axis=0).astype(np.float32)
+    matrix = np.concatenate(parts, axis=0)
     dim = matrix.shape[1]
+
+    # Cross-check against passage_ids.txt if it was written by a previous build_index.
+    saved_path = idir / IDS_FILE
+    if saved_path.exists():
+        saved = [ln for ln in saved_path.read_text(encoding="utf-8").splitlines() if ln]
+        if saved != all_ids:
+            raise ValueError(
+                f"Shard IDs ({len(all_ids)}) do not match {IDS_FILE} ({len(saved)}) — "
+                "delete passage_ids.txt or re-run embed_passages."
+            )
 
     idx = faiss.IndexFlatIP(dim)
     idx.add(matrix)
-    faiss.write_index(idx, str(idir / INDEX_FILE))
+    return idx, all_ids
+
+
+def build_index(
+    config: ModelConfig,
+    index_root: Path = paths.INDEXES,
+    *,
+    write_index: bool = False,
+) -> int:
+    """Concatenate all embedding shards into a FAISS flat-IP index.
+
+    Always writes passage_ids.txt (small text file needed by search and load_index).
+    Writes passages.index only when write_index=True — omit on Drive to avoid an
+    8+ GB upload that may be cut by an auto-shutdown.
+
+    Returns the number of passages indexed.
+    """
+    idx, all_ids = load_index(config, index_root)
+
+    idir = index_dir(config, index_root)
     (idir / IDS_FILE).write_text("\n".join(all_ids) + "\n", encoding="utf-8")
 
-    print(f"[{config.index_tag}] FAISS index: {len(all_ids):,} passages, dim={dim}")
+    if write_index:
+        import faiss
+        faiss.write_index(idx, str(idir / INDEX_FILE))
+
+    print(f"[{config.index_tag}] FAISS index: {len(all_ids):,} passages, dim={idx.d}")
     return len(all_ids)
 
 
@@ -295,11 +332,14 @@ def search(
     Returns top-k (passage_id, score) per query, sorted descending by score.
     score is cosine similarity (passages and queries are L2-normalised before indexing).
     """
-    import faiss
-
-    idir = index_dir(config, index_root)
-    idx  = faiss.read_index(str(idir / INDEX_FILE))
-    ids  = [ln for ln in (idir / IDS_FILE).read_text(encoding="utf-8").splitlines() if ln]
+    idir       = index_dir(config, index_root)
+    index_file = idir / INDEX_FILE
+    if index_file.exists():
+        import faiss
+        idx = faiss.read_index(str(index_file))
+        ids = [ln for ln in (idir / IDS_FILE).read_text(encoding="utf-8").splitlines() if ln]
+    else:
+        idx, ids = load_index(config, index_root)
 
     model   = _model if _model is not None else load_model(config)
     q_texts = [config.query_prefix + q for q in queries]

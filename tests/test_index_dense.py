@@ -188,7 +188,7 @@ def test_partial_shard_without_sidecar_is_redone(tmp_path):
 def test_build_index_produces_valid_index(tmp_path):
     passages = _make_passages(80)
     _, iroot, _ = _embed(tmp_path, passages, shard_size=50)
-    n = index_dense.build_index(index_dense.R2, index_root=iroot)
+    n = index_dense.build_index(index_dense.R2, index_root=iroot, write_index=True)
     assert n == 80
 
     idir = index_dense.index_dir(index_dense.R2, iroot)
@@ -247,6 +247,38 @@ def test_build_index_raises_on_incomplete_shard(tmp_path):
 
     with pytest.raises(ValueError, match="no .ids sidecar"):
         index_dense.build_index(index_dense.R2, index_root=iroot)
+
+
+def test_load_index_matches_build_index(tmp_path):
+    """load_index must yield the same IDs and identical search results as build_index."""
+    passages = _make_passages(80)
+    _, iroot, _ = _embed(tmp_path, passages, shard_size=50)
+
+    # build_index with write_index=True writes both passages.index and passage_ids.txt
+    index_dense.build_index(index_dense.R2, index_root=iroot, write_index=True)
+
+    # load_index rebuilds from shards and verifies against passage_ids.txt
+    idx_load, ids_load = index_dense.load_index(index_dense.R2, index_root=iroot)
+
+    idir = index_dense.index_dir(index_dense.R2, iroot)
+    ids_built = [ln for ln in (idir / index_dense.IDS_FILE).read_text().splitlines() if ln]
+
+    assert ids_load == ids_built
+    assert len(ids_load) == 80
+    assert idx_load.ntotal == 80
+    assert idx_load.d == _FakeModel.dim
+
+    # Search results must be identical between the saved index and the in-memory one.
+    rng = np.random.default_rng(42)
+    q = rng.standard_normal((3, _FakeModel.dim)).astype(np.float32)
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+
+    idx_saved = faiss.read_index(str(idir / index_dense.INDEX_FILE))
+    scores_saved, ind_saved = idx_saved.search(q, 5)
+    scores_load,  ind_load  = idx_load.search(q, 5)
+
+    np.testing.assert_array_equal(ind_saved, ind_load)
+    np.testing.assert_array_almost_equal(scores_saved, scores_load, decimal=5)
 
 
 # ---------------------------------------------------------------- model configs
