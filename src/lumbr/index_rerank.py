@@ -113,6 +113,16 @@ def rerank(
     """
     model = _model if _model is not None else load_model()
 
+    # Fail fast: check for missing query texts before spending time on inference.
+    missing_qids = set(run) - set(queries)
+    if missing_qids:
+        sample = sorted(missing_qids)[:5]
+        raise ValueError(
+            f"{len(missing_qids):,} of {len(run):,} question IDs in run are missing from "
+            f"queries: {sample}{'...' if len(missing_qids) > 5 else ''}. "
+            "Pass a queries dict containing all question IDs present in run."
+        )
+
     # Fail fast: check for missing passages before spending time on inference.
     all_pids = {pid for hits in run.values() for pid, _ in hits}
     missing_pids = all_pids - set(passage_lookup)
@@ -133,7 +143,7 @@ def rerank(
 
     for qid, hits in run.items():
         candidates = hits[:top_n]
-        q_text = queries.get(qid, "")
+        q_text = queries[qid]  # presence verified upfront
         pairs = [(q_text, passage_lookup.get(pid, "")) for pid, _ in candidates]
 
         if pairs:

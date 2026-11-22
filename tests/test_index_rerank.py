@@ -87,6 +87,33 @@ def test_rerank_changes_order_from_original():
     assert result["q1"][-1][0] == "p0"
 
 
+# ---------------------------------------------------------------- rerank: missing queries
+
+def test_rerank_raises_on_missing_query():
+    """run contains a qid not present in queries — must raise before any inference."""
+    run = {"q1": [("p0", 1.0)], "q_unknown": [("p1", 1.0)]}
+    lookup = {"p0": "text", "p1": "text"}
+    with pytest.raises(ValueError, match="missing from queries"):
+        index_rerank.rerank(
+            run, {"q1": "only q1 present"}, lookup,
+            progress=False, _model=_ConstantFakeCrossEncoder(),
+        )
+
+
+def test_rerank_missing_query_error_lists_ids():
+    """Error message must include the offending question IDs."""
+    run = {f"q{i}": [("p0", 1.0)] for i in range(7)}
+    lookup = {"p0": "text"}
+    with pytest.raises(ValueError) as exc_info:
+        index_rerank.rerank(
+            run, {"q0": "only one"}, lookup,
+            progress=False, _model=_ConstantFakeCrossEncoder(),
+        )
+    msg = str(exc_info.value)
+    assert "6" in msg          # 6 missing out of 7
+    assert "missing from queries" in msg
+
+
 # ---------------------------------------------------------------- rerank: missing passages
 
 def test_rerank_raises_on_missing_passage():
