@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from lumbr import index_rrf
+from lumbr import index_rrf, paths
 
 
 # ---------------------------------------------------------------- helpers
@@ -155,3 +155,24 @@ def test_save_run_roundtrip(tmp_path):
     assert set(loaded.keys()) == {"q1", "q2"}
     assert loaded["q1"][0] == ["p1", 0.9]
     assert len(loaded["q2"]) == 1
+
+
+# ---------------------------------------------------------------- paths.latest_run
+
+def test_latest_run_returns_most_recent(tmp_path):
+    for date in ["2026-11-01", "2026-11-10", "2026-11-21"]:
+        (tmp_path / f"r1_bm25_dev_{date}").mkdir()
+    result = paths.latest_run("r1_bm25", "dev", runs_dir=tmp_path)
+    assert result.name == "r1_bm25_dev_2026-11-21"
+
+
+def test_latest_run_ignores_other_prefixes(tmp_path):
+    (tmp_path / "r1_bm25_dev_2026-11-01").mkdir()
+    (tmp_path / "r3_dev_2026-11-21").mkdir()
+    result = paths.latest_run("r1_bm25", "dev", runs_dir=tmp_path)
+    assert result.name == "r1_bm25_dev_2026-11-01"
+
+
+def test_latest_run_raises_if_none_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        paths.latest_run("r1_bm25", "dev", runs_dir=tmp_path)
