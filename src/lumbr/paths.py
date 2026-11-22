@@ -68,3 +68,20 @@ def show() -> None:
                  "LOCAL_ROOT", "LOCAL_RAW"]:
         p = globals()[name]
         print(f"{'[ok]' if p.exists() else '[--]'} {name:<10} {p}")
+
+
+def latest_run(tag_prefix: str, split: str = "dev", runs_dir: Path = RUNS) -> Path:
+    """Return the most recently dated run subfolder matching {tag_prefix}_{split}_*.
+
+    Folder names follow the convention {tag}_{split}_{date} (ISO-8601 date).
+    ISO dates sort lexicographically in chronological order, so the last match
+    after sorting is always the most recent run.
+
+    Raises FileNotFoundError if no matching folder exists.
+    """
+    matches = sorted(runs_dir.glob(f"{tag_prefix}_{split}_*"))
+    if not matches:
+        raise FileNotFoundError(
+            f"No run folder matching '{tag_prefix}_{split}_*' in {runs_dir}"
+        )
+    return matches[-1]
