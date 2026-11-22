@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from lumbr import index_rerank
+from lumbr import index_rerank, paths
 
 
 # ---------------------------------------------------------------- helpers
@@ -83,9 +83,34 @@ def test_rerank_changes_order_from_original():
         run, {"q1": "query"}, _lookup(pids),
         progress=False, _model=_ReverseFakeCrossEncoder(),
     )
-    # Original first = p0 (highest input score); after reversal it should be last.
     assert result["q1"][0][0] == "p2"
     assert result["q1"][-1][0] == "p0"
+
+
+# ---------------------------------------------------------------- rerank: missing passages
+
+def test_rerank_raises_on_missing_passage():
+    """Default allow_missing=False: raises ValueError if any pid is absent."""
+    run = {"q1": [("p0", 2.0), ("p1", 1.0)]}
+    lookup = {"p0": "some text"}  # p1 deliberately missing
+    with pytest.raises(ValueError, match="missing from passage_lookup"):
+        index_rerank.rerank(
+            run, {"q1": "query"}, lookup,
+            progress=False, _model=_ConstantFakeCrossEncoder(),
+        )
+
+
+def test_rerank_allow_missing_does_not_raise():
+    """allow_missing=True: missing passages get empty string; no exception raised."""
+    run = {"q1": [("p0", 2.0), ("p1", 1.0)]}
+    lookup = {"p0": "some text"}  # p1 missing
+    result, _ = index_rerank.rerank(
+        run, {"q1": "query"}, lookup,
+        allow_missing=True, progress=False, _model=_ConstantFakeCrossEncoder(),
+    )
+    pids = {pid for pid, _ in result["q1"]}
+    assert "p0" in pids
+    assert "p1" in pids
 
 
 # ---------------------------------------------------------------- rerank: edge cases
@@ -106,20 +131,6 @@ def test_rerank_multiple_queries():
     for qid, hits in result.items():
         scores = [s for _, s in hits]
         assert scores == sorted(scores, reverse=True)
-
-
-def test_rerank_missing_passage_in_lookup_does_not_crash():
-    """A pid absent from lookup gets empty text — cross-encoder still runs."""
-    run = {"q1": [("p0", 2.0), ("p1", 1.0)]}
-    # p1 deliberately omitted from lookup
-    lookup = {"p0": "some text"}
-    result, _ = index_rerank.rerank(
-        run, {"q1": "query"}, lookup,
-        progress=False, _model=_ConstantFakeCrossEncoder(),
-    )
-    pids_returned = {pid for pid, _ in result["q1"]}
-    assert "p0" in pids_returned
-    assert "p1" in pids_returned
 
 
 # ---------------------------------------------------------------- rerank: latency stats
@@ -155,11 +166,12 @@ def test_build_passage_lookup_only_fetches_needed(tmp_path):
     _write_passages(passages, pfile)
 
     run = {"q1": [("doc0#000", 1.0), ("doc2#000", 0.8)]}
-    lookup = index_rerank.build_passage_lookup(run, pfile)
+    lookup, missing = index_rerank.build_passage_lookup(run, pfile)
 
     assert set(lookup.keys()) == {"doc0#000", "doc2#000"}
     assert lookup["doc0#000"] == "text 0"
     assert lookup["doc2#000"] == "text 2"
+    assert missing == set()
 
 
 def test_build_passage_lookup_all_needed_found(tmp_path):
@@ -168,12 +180,26 @@ def test_build_passage_lookup_all_needed_found(tmp_path):
     _write_passages(passages, pfile)
 
     run = {"q1": [(f"doc{i}#000", float(5 - i)) for i in range(5)]}
-    lookup = index_rerank.build_passage_lookup(run, pfile)
+    lookup, missing = index_rerank.build_passage_lookup(run, pfile)
 
     assert len(lookup) == 5
+    assert missing == set()
     for i in range(5):
-        assert f"doc{i}#000" in lookup
         assert lookup[f"doc{i}#000"] == f"text {i}"
+
+
+def test_build_passage_lookup_reports_missing(tmp_path):
+    """IDs not present in passages.jsonl appear in the returned missing set."""
+    passages = [{"passage_id": f"doc{i}#000", "text": f"text {i}"} for i in range(3)]
+    pfile = tmp_path / "passages.jsonl"
+    _write_passages(passages, pfile)
+
+    # Request doc3#000 and doc4#000 which don't exist in the file.
+    run = {"q1": [(f"doc{i}#000", 1.0) for i in range(5)]}
+    lookup, missing = index_rerank.build_passage_lookup(run, pfile)
+
+    assert len(lookup) == 3
+    assert missing == {"doc3#000", "doc4#000"}
 
 
 # ---------------------------------------------------------------- save_run
@@ -226,3 +252,24 @@ def test_save_run_roundtrip(tmp_path):
     assert set(loaded.keys()) == {"q1", "q2"}
     assert loaded["q1"][0] == ["p0", 0.9]
     assert len(loaded["q2"]) == 1
+
+
+# ---------------------------------------------------------------- latest_run
+
+def test_latest_run_returns_most_recent(tmp_path):
+    for date in ["2026-11-01", "2026-11-10", "2026-11-21"]:
+        (tmp_path / f"r1_bm25_dev_{date}").mkdir()
+    result = paths.latest_run("r1_bm25", "dev", runs_dir=tmp_path)
+    assert result.name == "r1_bm25_dev_2026-11-21"
+
+
+def test_latest_run_ignores_other_prefixes(tmp_path):
+    (tmp_path / "r1_bm25_dev_2026-11-01").mkdir()
+    (tmp_path / "r3_dev_2026-11-21").mkdir()
+    result = paths.latest_run("r1_bm25", "dev", runs_dir=tmp_path)
+    assert result.name == "r1_bm25_dev_2026-11-01"
+
+
+def test_latest_run_raises_if_none_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        paths.latest_run("r1_bm25", "dev", runs_dir=tmp_path)

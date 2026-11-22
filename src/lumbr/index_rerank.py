@@ -41,9 +41,11 @@ def load_model(*, device: str | None = None):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # 1024 covers a ≤512-token passage plus the question with room to spare,
+    # avoiding the model's 8 K default which pads every batch to full context length.
     return CrossEncoder(
         RERANKER_MODEL,
-        max_length=512,
+        max_length=1024,
         device=device,
         automodel_args={"torch_dtype": torch.float16},
     )
@@ -54,11 +56,16 @@ def load_model(*, device: str | None = None):
 def build_passage_lookup(
     run: dict[str, list[tuple[str, float]]],
     passages_path: Path | str,
-) -> dict[str, str]:
-    """Single-pass scan of passages_path; returns {passage_id: text} only for IDs in run.
+) -> tuple[dict[str, str], set[str]]:
+    """Single-pass scan of passages_path; returns only IDs present in run.
 
     Building the lookup from the run rather than loading all 772 K passages caps
     peak memory at ~tens of MB instead of several GB.
+
+    Returns:
+        (lookup, missing_ids)
+        lookup:      {passage_id: text} for every ID that was found
+        missing_ids: set of IDs requested by run that were not found in the file
     """
     needed = {pid for hits in run.values() for pid, _ in hits}
     lookup: dict[str, str] = {}
@@ -68,7 +75,8 @@ def build_passage_lookup(
             lookup[pid] = p["text"]
         if len(lookup) >= len(needed):
             break
-    return lookup
+    missing = needed - set(lookup)
+    return lookup, missing
 
 
 # ---------------------------------------------------------------- reranking
@@ -81,6 +89,7 @@ def rerank(
     top_n: int = 50,
     batch_size: int = 64,
     progress: bool = True,
+    allow_missing: bool = False,
     _model=None,  # inject a fake cross-encoder in tests; None loads the real model
 ) -> tuple[dict[str, list[tuple[str, float]]], dict]:
     """Rerank each query's top_n passages using a cross-encoder.
@@ -92,6 +101,9 @@ def rerank(
         top_n:          passages to rerank and return per query
         batch_size:     cross-encoder inference batch size (tune for VRAM)
         progress:       show tqdm progress bar
+        allow_missing:  if False (default), raise ValueError when any pid in run
+                        is absent from passage_lookup; if True, substitute empty
+                        string (the cross-encoder will score it very low)
         _model:         inject a fake encoder in tests; None loads the real model
 
     Returns:
@@ -100,6 +112,16 @@ def rerank(
         stats: {"median_ms": float, "p95_ms": float, "n_questions": int}
     """
     model = _model if _model is not None else load_model()
+
+    # Fail fast: check for missing passages before spending time on inference.
+    all_pids = {pid for hits in run.values() for pid, _ in hits}
+    missing_pids = all_pids - set(passage_lookup)
+    if missing_pids and not allow_missing:
+        raise ValueError(
+            f"{len(missing_pids):,} of {len(all_pids):,} passage IDs are missing from "
+            "passage_lookup. Call build_passage_lookup first (assert missing == set()), "
+            "or pass allow_missing=True to substitute empty strings."
+        )
 
     bar = None
     if progress:
