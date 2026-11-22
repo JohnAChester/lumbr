@@ -29,6 +29,7 @@ provided; 0.0 otherwise.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -60,10 +61,12 @@ def passages_to_docs(
 # ---------------------------------------------------------------- helpers
 
 def _load_split_ids(split: str) -> list[str]:
-    path = _SPLITS_DIR / f"{split}_question_ids.txt"
+    splits_dir = Path(os.environ.get("LUMBR_SPLITS_DIR", _SPLITS_DIR))
+    path = splits_dir / f"{split}_question_ids.txt"
     if not path.exists():
         raise FileNotFoundError(
-            f"{path} not found — run notebook 06 to generate and commit the split first."
+            f"{path} not found — run notebook 06 to generate and commit the split first, "
+            "or set LUMBR_SPLITS_DIR to a directory containing the split files."
         )
     return [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln]
 
