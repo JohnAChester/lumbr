@@ -1,0 +1,59 @@
+{
+  "dev": 100,
+  "test": 400,
+  "total": 500,
+  "category_col": "question_type",
+  "seed": 42,
+  "by_category": {
+    "basic": {
+      "total": 175,
+      "dev": 35,
+      "test": 140
+    },
+    "completeness": {
+      "total": 20,
+      "dev": 4,
+      "test": 16
+    },
+    "conflicting_info": {
+      "total": 20,
+      "dev": 4,
+      "test": 16
+    },
+    "constrained": {
+      "total": 30,
+      "dev": 6,
+      "test": 24
+    },
+    "high_level": {
+      "total": 10,
+      "dev": 2,
+      "test": 8
+    },
+    "info_not_found": {
+      "total": 20,
+      "dev": 4,
+      "test": 16
+    },
+    "intra_document_reasoning": {
+      "total": 40,
+      "dev": 8,
+      "test": 32
+    },
+    "miscellaneous": {
+      "total": 20,
+      "dev": 4,
+      "test": 16
+    },
+    "project_related": {
+      "total": 40,
+      "dev": 8,
+      "test": 32
+    },
+    "semantic": {
+      "total": 125,
+      "dev": 25,
+      "test": 100
+    }
+  }
+}
