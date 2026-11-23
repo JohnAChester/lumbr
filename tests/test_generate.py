@@ -311,3 +311,24 @@ def test_chat_output_count_mismatch_raises():
         generate.generate(lambda batch: [], [("q1", "Who owns A?")], run, by_id, prompt)
     with pytest.raises(ValueError):
         generate.generate(lambda batch: batch * 2, [("q1", "Who owns A?")], run, by_id, prompt)
+
+
+# ---------------------------------------------------------------- duplicate hits
+
+def test_duplicate_hits_skipped_and_counted(tmp_path):
+    by_id = _by_id(*[_doc(f"d{i}", 1) for i in range(7)])
+    hits = [_pid("d0", 0), _pid("d1", 0), _pid("d0", 0), _pid("d2", 0),
+            _pid("d3", 0), _pid("d1", 0), _pid("d4", 0), _pid("d5", 0)]
+    run = {"q": [(pid, 10.0 - i) for i, pid in enumerate(hits)]}
+    [rec], _ = generate.generate(_FakeChat({"Q?": "x [1]."}), [("q", "Q?")], run, by_id,
+                                 generate.load_prompt(), k=5)
+    used = [pid for s in rec["sources"] for pid in s["passage_ids"]]
+    assert used == [_pid(f"d{i}", 0) for i in range(5)]
+    assert rec["n_duplicate_hits"] == 2
+    out = generate.save_answers([rec], tmp_path, {}, date="2026-11-23")
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["n_questions_with_duplicate_hits"] == 1
+
+
+def test_needed_doc_ids_skips_duplicates():
+    run = {"q": [(_pid("a", 0), 3.0), (_pid("a", 0), 2.0), (_pid("b", 0), 1.0)]}
+    assert generate.needed_doc_ids(run, ["q"], k=2) == {"a", "b"}

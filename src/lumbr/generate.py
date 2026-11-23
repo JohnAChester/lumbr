@@ -159,10 +159,28 @@ def make_vllm_chat(llm, sampling_params) -> ChatFn:
     return chat
 
 
+def top_k_hits(hits: list[tuple[str, float]], k: int = K) -> tuple[list[str], int]:
+    """The first k distinct passage IDs of a run's hit list, and how many repeats were skipped on the way.
+
+    Every setup then gets k different passages, even if a fused or reranked run lists one twice;
+    the count is kept so such a retriever bug still shows in the run's meta.json.
+    """
+    seen: list[str] = []
+    skipped = 0
+    for pid, _ in hits:
+        if len(seen) == k:
+            break
+        if pid in seen:
+            skipped += 1
+        else:
+            seen.append(pid)
+    return seen, skipped
+
+
 def needed_doc_ids(run: dict[str, list[tuple[str, float]]], question_ids: Iterable[str],
                    k: int = K) -> set[str]:
     """Doc IDs of the top-k hits of these questions (what `load_passages` must load)."""
-    return {schema.doc_id_of(pid) for q in question_ids for pid, _ in run.get(q, [])[:k]}
+    return {schema.doc_id_of(pid) for q in question_ids for pid in top_k_hits(run.get(q, []), k)[0]}
 
 
 def generate(chat: ChatFn, questions: list[tuple[str, str]],
@@ -175,8 +193,9 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
     """
     prepared, batch = [], []
     for qid, question in questions:
-        sources = build_sources([pid for pid, _ in run.get(qid, [])[:k]], by_id, neighbours)
-        prepared.append((qid, question, sources))
+        hit_ids, n_dupes = top_k_hits(run.get(qid, []), k)
+        sources = build_sources(hit_ids, by_id, neighbours)
+        prepared.append((qid, question, sources, n_dupes))
         if sources:
             batch.append(build_messages(question, sources, prompt))
 
@@ -188,7 +207,7 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
     outputs = iter(results)
 
     records = []
-    for qid, question, sources in prepared:
+    for qid, question, sources, n_dupes in prepared:
         out = next(outputs) if sources else {"text": prompt["abstain"], "prompt_tokens": 0,
                                              "completion_tokens": 0, "finish_reason": None}
         records.append({
@@ -197,7 +216,7 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
             "sources": [{key: s[key] for key in ("n", "doc_id", "passage_ids", "window_ids")}
                         for s in sources],
             "prompt_tokens": out["prompt_tokens"], "completion_tokens": out["completion_tokens"],
-            "finish_reason": out.get("finish_reason"),
+            "finish_reason": out.get("finish_reason"), "n_duplicate_hits": n_dupes,
         })
     return records, wall_s
 
@@ -216,7 +235,8 @@ def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = 
     full_meta = {**meta, "git_commit": git_sha, "date": today, "n_questions": len(records),
                  "n_abstained": sum(r["abstained"] for r in records),
                  "n_invalid_citations": sum(len(r["invalid_citations"]) for r in records),
-                 "n_truncated": sum(r.get("finish_reason") == "length" for r in records)}
+                 "n_truncated": sum(r.get("finish_reason") == "length" for r in records),
+                 "n_questions_with_duplicate_hits": sum(r.get("n_duplicate_hits", 0) > 0 for r in records)}
     with open(out / "meta.json", "w", encoding="utf-8") as f:
         json.dump(full_meta, f, indent=2)
     print(f"[gen] {len(records)} answers + meta -> {out}")
