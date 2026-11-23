@@ -486,3 +486,13 @@ def test_prompt_v3_uses_placeholder_citation_examples():
     prompt = generate.load_prompt()
     assert prompt["version"] >= 3
     assert "[n]" in prompt["system"] and "[n][m]" in prompt["system"]
+
+
+def test_prompt_v4_exact_question_rule():
+    # Round 3: answers from look-alike documents (qst_0032, qst_0448) and a hedge instead of the line (qst_0052).
+    prompt = generate.load_prompt()
+    assert prompt["version"] >= 4
+    system = prompt["system"]
+    assert "Answer only if a source answers this exact question" in system
+    # It must come before the abstention rule it points to.
+    assert system.index("this exact question") < system.index(prompt["abstain"])
