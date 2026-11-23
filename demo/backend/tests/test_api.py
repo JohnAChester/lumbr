@@ -48,3 +48,21 @@ def test_passages_limits_and_unknown(client):
     assert client.post("/passages", json={"ids": ["dsid_aaa#000"] * 17}, headers=KEY).status_code == 422
     body = client.post("/passages", json={"ids": ["dsid_aaa#000", "dsid_zzz#000", "bad"]}, headers=KEY).json()
     assert [p["passage_id"] for p in body["passages"]] == ["dsid_aaa#000"]
+
+
+# A lone surrogate, JSON-escaped: what a client sends after cutting an emoji in half.
+LONE = "\\" + "ud83d"
+
+
+@pytest.mark.parametrize("raw", [
+    '{"query": "hi ' + LONE + '"}',
+    '{"query": "ok", "history": [{"q": "a", "a": "cut emoji ' + LONE + '"}]}',
+])
+def test_lone_surrogates_are_422_not_500(client, raw):
+    r = client.post("/retrieve", content=raw.encode("ascii"), headers={**KEY, "content-type": "application/json"})
+    assert r.status_code == 422
+
+
+def test_non_ascii_auth_header_is_401_not_500(client):
+    r = client.post("/retrieve", json={"query": "ok"}, headers={"Authorization": "Bearer ".encode() + bytes([0xE9])})
+    assert r.status_code == 401

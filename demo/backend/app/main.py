@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
 
 from lumbr_demo.service import MAX_HITS, Retriever
@@ -14,6 +16,14 @@ from lumbr_demo.service import MAX_HITS, Retriever
 PassageId = Annotated[str, StringConstraints(pattern=r"^dsid_[0-9a-z]+#\d{3}$")]
 Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 Turn = Annotated[str, StringConstraints(max_length=600)]
+
+
+async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 without echoing the input: FastAPI's default echoes it, and text that isn't valid UTF-8
+    (an emoji cut in half, a lone surrogate) then fails to encode and becomes a 500."""
+    detail = [{"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")}
+              for e in exc.errors()]
+    return JSONResponse({"detail": detail}, status_code=422)
 
 
 class HistoryTurn(BaseModel):
@@ -35,6 +45,7 @@ class PassagesBody(BaseModel):
 def create_app(retriever: Retriever | None = None, key: str | None = None) -> FastAPI:
     """With no arguments, the retriever and key load from the environment on first request."""
     app = FastAPI(title="Lumbr demo search")
+    app.add_exception_handler(RequestValidationError, _validation_error)
     state: dict = {"retriever": retriever, "key": key}
 
     def get_retriever() -> Retriever:
@@ -45,7 +56,9 @@ def create_app(retriever: Retriever | None = None, key: str | None = None) -> Fa
 
     def authorised(authorization: str | None = Header(None)) -> None:
         want = state["key"] if state["key"] is not None else os.environ.get("LUMBR_BACKEND_KEY", "")
-        if not want or not authorization or not hmac.compare_digest(authorization, f"Bearer {want}"):
+        # Compare bytes: compare_digest raises TypeError on non-ASCII str (a 500 instead of a 401).
+        given = (authorization or "").encode("utf-8", "replace")
+        if not want or not given or not hmac.compare_digest(given, f"Bearer {want}".encode("utf-8")):
             raise HTTPException(401, "bad or missing key")
 
     @app.get("/health")
