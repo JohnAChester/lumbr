@@ -354,3 +354,37 @@ def test_answers_dir_raises_early_if_taken(tmp_path):
     with pytest.raises(FileExistsError):
         generate.answers_dir(tmp_path, "gen_r1_p1", "dev", date="2026-11-23")
     assert generate.answers_dir(tmp_path, "gen_r1_p2", "dev", date="2026-11-23").name == "gen_r1_p2_dev_2026-11-23"
+
+
+# ---------------------------------------------------------------- load_passages speed + edges
+
+def test_load_passages_skips_unneeded_lines_without_parsing(tmp_path):
+    path, good = tmp_path / "passages.jsonl", tmp_path / "good.jsonl"
+    schema.write_jsonl(_doc("a", 2), good)
+    # An unneeded line before the needed ones: it only breaks if it gets JSON-parsed.
+    path.write_text('{"passage_id": "z#000", "doc_id": "z", this line is not valid JSON\n'
+                    + good.read_text(encoding="utf-8"), encoding="utf-8")
+    got = generate.load_passages({"a"}, path)
+    assert set(got) == {_pid("a", 0), _pid("a", 1)}
+
+
+def test_load_passages_stops_once_all_docs_complete(tmp_path):
+    path = tmp_path / "passages.jsonl"
+    schema.write_jsonl(_doc("a", 2), path)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("not json at all\n")  # would raise if reached
+    assert set(generate.load_passages({"a"}, path)) == {_pid("a", 0), _pid("a", 1)}
+
+
+def test_load_passages_missing_doc_scans_whole_file(tmp_path):
+    path = tmp_path / "passages.jsonl"
+    schema.write_jsonl(_doc("a", 1) + _doc("b", 2), path)
+    assert set(generate.load_passages({"b", "nope"}, path)) == {_pid("b", 0), _pid("b", 1)}
+
+
+def test_load_passages_falls_back_when_format_differs(tmp_path):
+    path = tmp_path / "passages.jsonl"
+    with open(path, "w", encoding="utf-8") as f:
+        for p in _doc("a", 2):
+            f.write(json.dumps(p, separators=(",", ":")) + "\n")  # no spaces: the quick check can't match
+    assert set(generate.load_passages({"a"}, path)) == {_pid("a", 0), _pid("a", 1)}

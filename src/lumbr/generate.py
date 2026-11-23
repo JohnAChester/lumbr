@@ -30,22 +30,43 @@ _CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
 # ---------------------------------------------------------------- context
 
+_DOC_ID_MARK = '"doc_id": "'  # how schema.write_jsonl (json.dumps defaults) writes the field
+
+
+def _line_doc_id(line: str) -> str | None:
+    """The doc_id read straight from a JSONL line's text, or None if the line isn't in the usual format."""
+    i = line.find(_DOC_ID_MARK)
+    if i < 0:
+        return None
+    start = i + len(_DOC_ID_MARK)
+    end = line.find('"', start)
+    return line[start:end] if end > start else None
+
+
 def load_passages(doc_ids: set[str], passages_path: Path | str) -> dict[str, dict]:
     """{passage_id: passage} for every passage of `doc_ids`, in one streaming pass.
 
+    Only lines whose doc_id is needed get JSON-parsed (the doc_id is read from the text first;
+    a line in an unexpected format is parsed in full, so it is never skipped by mistake).
     Stops early once every requested document has all of its `n_chunks` passages.
     """
     by_id: dict[str, dict] = {}
     remaining: dict[str, int] = {}
-    for p in schema.read_jsonl(passages_path):
-        d = p["doc_id"]
-        if d not in doc_ids:
-            continue
-        by_id[p["passage_id"]] = p
-        left = remaining.setdefault(d, p["n_chunks"]) - 1
-        remaining[d] = left
-        if left == 0 and len(remaining) == len(doc_ids) and not any(remaining.values()):
-            break
+    with open(passages_path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            quick = _line_doc_id(line)
+            if quick is not None and quick not in doc_ids:
+                continue
+            p = json.loads(line)
+            d = p["doc_id"]
+            if d not in doc_ids:
+                continue
+            by_id[p["passage_id"]] = p
+            remaining[d] = remaining.setdefault(d, p["n_chunks"]) - 1
+            if len(remaining) == len(doc_ids) and not any(remaining.values()):
+                break
     return by_id
 
 
