@@ -521,3 +521,8 @@ def test_no_neighbours_gives_hit_only_windows():
     by_id = _by_id(_doc("a", 5))
     [src] = generate.build_sources([_pid("a", 2)], by_id, neighbours=0)
     assert src["window_ids"] == [_pid("a", 2)]
+
+
+def test_run_tag_for_reranked_retriever():
+    assert generate.run_tag("r5_r6", {"version": 4}) == "gen_r5_r6_p4"
+    assert generate.run_tag("r5_r6", {"version": 4}, neighbours=0) == "gen_r5_r6_p4_n0"
