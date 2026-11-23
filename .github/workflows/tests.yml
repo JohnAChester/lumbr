@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Core + dev deps, plus the light packages that let every test run instead of skipping:
+      # faiss-cpu (test_index_dense), ranx (test_eval), scikit-learn/scipy (test_subsample).
+      # The full extras are skipped on purpose: they pull in sentence-transformers/torch,
+      # which no test needs.
+      - name: Install
+        run: pip install -e ".[dev]" faiss-cpu ranx scikit-learn scipy
+
+      - name: Run tests
+        run: pytest -q
