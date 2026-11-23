@@ -147,8 +147,9 @@ def _normalise(text: str) -> str:
 def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
     """Citations mapped back to IDs, out-of-range citation numbers, and whether the answer abstains.
 
-    Accepts [2], [1][3] and [1, 3]. An answer abstains when it contains the abstention line and
-    cites nothing valid; a partial answer that cites a source and says what is missing does not.
+    Accepts [2], [1][3] and [1, 3]. An answer abstains when it starts with the abstention line
+    (normalised, final period optional), even if it then explains what the sources do cover and cites
+    them. A partial answer gives its answer first, so it does not count as an abstention.
     """
     by_n = {s["n"]: s for s in sources}
     citations: list[dict] = []
@@ -162,7 +163,7 @@ def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
             elif n not in invalid:
                 invalid.append(n)
     line = _normalise(prompt["abstain"]).rstrip(".!")  # a dropped final period still counts
-    abstained = not citations and line in _normalise(text)
+    abstained = _normalise(text).startswith(line)
     return {"citations": citations, "invalid_citations": invalid, "abstained": abstained}
 
 
@@ -278,3 +279,36 @@ def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = 
         json.dump(full_meta, f, indent=2)
     print(f"[gen] {len(records)} answers + meta -> {out}")
     return out
+
+
+# ---------------------------------------------------------------- comparing rounds
+
+def rescore_records(records: list[dict], prompt: dict) -> list[dict]:
+    """Copies of saved answer records with citations and abstention re-parsed by the current rules.
+
+    Lets an earlier run be compared with a new one under the same scoring, without regenerating.
+    """
+    return [{**r, **parse_answer(r["answer"], r["sources"], prompt)} for r in records]
+
+
+def summarize(records: list[dict], question_types: dict[str, str],
+              gold_docs: dict[str, set[str]]) -> dict:
+    """One round's headline numbers, for comparing prompt versions side by side.
+
+    "answerable" means every question type except info_not_found. A gold doc counts as present when
+    any of the question's expected doc IDs is among the sources the generator saw.
+    """
+    def gold_present(r):
+        return bool(gold_docs[r["question_id"]] & {s["doc_id"] for s in r["sources"]})
+
+    nf = [r for r in records if question_types[r["question_id"]] == "info_not_found"]
+    answerable = [r for r in records if question_types[r["question_id"]] != "info_not_found"]
+    return {
+        "n": len(records),
+        "abstained": sum(r["abstained"] for r in records),
+        "info_not_found_abstained": f"{sum(r['abstained'] for r in nf)}/{len(nf)}",
+        "answerable_abstained_gold_present": sum(r["abstained"] and gold_present(r) for r in answerable),
+        "answerable_answered_gold_missing": sum(not r["abstained"] and not gold_present(r) for r in answerable),
+        "answers_with_invalid_citations": sum(bool(r["invalid_citations"]) for r in records),
+        "truncated": sum(r.get("finish_reason") == "length" for r in records),
+    }

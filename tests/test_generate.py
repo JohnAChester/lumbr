@@ -388,3 +388,47 @@ def test_load_passages_falls_back_when_format_differs(tmp_path):
         for p in _doc("a", 2):
             f.write(json.dumps(p, separators=(",", ":")) + "\n")  # no spaces: the quick check can't match
     assert set(generate.load_passages({"a"}, path)) == {_pid("a", 0), _pid("a", 1)}
+
+
+# ---------------------------------------------------------------- round 2: abstention = starts with the line
+
+def test_abstention_with_cited_explanation_counts():
+    prompt = generate.load_prompt()
+    text = prompt["abstain"] + " [3] mentions the rollout but not the budgets. [1] is about something else."
+    got = generate.parse_answer(text, _three_sources(), prompt)
+    assert got["abstained"] is True
+    assert [c["n"] for c in got["citations"]] == [3, 1]  # still recorded, for the explanation
+
+
+def test_abstention_line_later_in_answer_is_not_abstention():
+    prompt = generate.load_prompt()
+    text = "Retention is 90 days. " + prompt["abstain"]  # uncited, but it answered first
+    assert generate.parse_answer(text, _three_sources(), prompt)["abstained"] is False
+
+
+def test_rescore_records_reapplies_parsing():
+    prompt = generate.load_prompt()
+    old = {"question_id": "q", "answer": prompt["abstain"] + " [1] is related only.",
+           "abstained": False, "citations": [], "invalid_citations": [],
+           "sources": [{"n": 1, "doc_id": "a", "passage_ids": ["a#000"], "window_ids": ["a#000"]}]}
+    [new] = generate.rescore_records([old], prompt)
+    assert new["abstained"] is True
+    assert new["citations"] == [{"n": 1, "passage_ids": ["a#000"], "doc_id": "a"}]
+    assert old["abstained"] is False  # input untouched
+
+
+def test_summarize_round():
+    recs = [
+        {"question_id": "q1", "abstained": True, "invalid_citations": [], "finish_reason": "stop",
+         "sources": [{"doc_id": "g1"}]},                     # abstained with gold present
+        {"question_id": "q2", "abstained": False, "invalid_citations": [7], "finish_reason": "length",
+         "sources": [{"doc_id": "x"}]},                      # answered without gold
+        {"question_id": "q3", "abstained": True, "invalid_citations": [], "finish_reason": "stop",
+         "sources": []},                                     # info_not_found, abstained
+    ]
+    types = {"q1": "basic", "q2": "basic", "q3": "info_not_found"}
+    gold = {"q1": {"g1"}, "q2": {"g2"}, "q3": set()}
+    s = generate.summarize(recs, types, gold)
+    assert s == {"n": 3, "abstained": 2, "info_not_found_abstained": "1/1",
+                 "answerable_abstained_gold_present": 1, "answerable_answered_gold_missing": 1,
+                 "answers_with_invalid_citations": 1, "truncated": 1}
