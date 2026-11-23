@@ -278,3 +278,36 @@ def test_save_refuses_to_overwrite(tmp_path):
     with pytest.raises(FileExistsError):
         generate.save_answers(records[:1], tmp_path, {}, date="2026-11-23")
     assert (out / "answers.jsonl").read_bytes() == before
+
+
+# ---------------------------------------------------------------- final review fixes
+
+def test_abstention_without_final_period():
+    prompt = generate.load_prompt()
+    text = prompt["abstain"].rstrip(".")
+    assert generate.parse_answer(text, _three_sources(), prompt)["abstained"] is True
+
+
+def test_finish_reason_recorded_and_truncations_counted(tmp_path):
+    prompt = generate.load_prompt()
+    by_id, run = _run_fixture()
+
+    def chat(batch):
+        return [{"text": "Alice owns it [1", "prompt_tokens": 100, "completion_tokens": 512,
+                 "finish_reason": "length"} for _ in batch]
+
+    records, _ = generate.generate(chat, [("q1", "Who owns A?"), ("missing", "Nothing?")],
+                                   run, by_id, prompt)
+    assert records[0]["finish_reason"] == "length"
+    assert records[1]["finish_reason"] is None
+    out = generate.save_answers(records, tmp_path, {}, date="2026-11-23")
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["n_truncated"] == 1
+
+
+def test_chat_output_count_mismatch_raises():
+    prompt = generate.load_prompt()
+    by_id, run = _run_fixture()
+    with pytest.raises(ValueError):
+        generate.generate(lambda batch: [], [("q1", "Who owns A?")], run, by_id, prompt)
+    with pytest.raises(ValueError):
+        generate.generate(lambda batch: batch * 2, [("q1", "Who owns A?")], run, by_id, prompt)

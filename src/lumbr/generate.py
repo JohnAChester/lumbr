@@ -23,7 +23,8 @@ from lumbr import chunk, schema
 K = 5           # passages per question the generator sees
 NEIGHBOURS = 1  # chunks added on each side of a hit (D16)
 PROMPT_PATH = Path(__file__).parent / "prompts" / "answer.json"
-# A batch of chat message lists in; one {"text", "prompt_tokens", "completion_tokens"} per input out.
+# A batch of chat message lists in; one {"text", "prompt_tokens", "completion_tokens", "finish_reason"}
+# per input out, in order. finish_reason "length" means the answer was cut off at max_tokens.
 ChatFn = Callable[[list[list[dict]]], list[dict]]
 _CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
@@ -140,7 +141,8 @@ def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
                                       "doc_id": by_n[n]["doc_id"]})
             elif n not in invalid:
                 invalid.append(n)
-    abstained = not citations and _normalise(prompt["abstain"]) in _normalise(text)
+    line = _normalise(prompt["abstain"]).rstrip(".!")  # a dropped final period still counts
+    abstained = not citations and line in _normalise(text)
     return {"citations": citations, "invalid_citations": invalid, "abstained": abstained}
 
 
@@ -152,7 +154,8 @@ def make_vllm_chat(llm, sampling_params) -> ChatFn:
         outs = llm.chat(batch, sampling_params, use_tqdm=True)
         return [{"text": o.outputs[0].text,
                  "prompt_tokens": len(o.prompt_token_ids),
-                 "completion_tokens": len(o.outputs[0].token_ids)} for o in outs]
+                 "completion_tokens": len(o.outputs[0].token_ids),
+                 "finish_reason": o.outputs[0].finish_reason} for o in outs]
     return chat
 
 
@@ -178,19 +181,23 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
             batch.append(build_messages(question, sources, prompt))
 
     start = time.perf_counter()
-    outputs = iter(chat(batch)) if batch else iter(())
+    results = chat(batch) if batch else []
     wall_s = time.perf_counter() - start
+    if len(results) != len(batch):
+        raise ValueError(f"chat returned {len(results)} outputs for {len(batch)} prompts")
+    outputs = iter(results)
 
     records = []
     for qid, question, sources in prepared:
-        out = next(outputs) if sources else {"text": prompt["abstain"],
-                                             "prompt_tokens": 0, "completion_tokens": 0}
+        out = next(outputs) if sources else {"text": prompt["abstain"], "prompt_tokens": 0,
+                                             "completion_tokens": 0, "finish_reason": None}
         records.append({
             "question_id": qid, "question": question, "answer": out["text"],
             **parse_answer(out["text"], sources, prompt),
             "sources": [{key: s[key] for key in ("n", "doc_id", "passage_ids", "window_ids")}
                         for s in sources],
             "prompt_tokens": out["prompt_tokens"], "completion_tokens": out["completion_tokens"],
+            "finish_reason": out.get("finish_reason"),
         })
     return records, wall_s
 
@@ -208,7 +215,8 @@ def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = 
                              capture_output=True, text=True).stdout.strip() or "unknown"
     full_meta = {**meta, "git_commit": git_sha, "date": today, "n_questions": len(records),
                  "n_abstained": sum(r["abstained"] for r in records),
-                 "n_invalid_citations": sum(len(r["invalid_citations"]) for r in records)}
+                 "n_invalid_citations": sum(len(r["invalid_citations"]) for r in records),
+                 "n_truncated": sum(r.get("finish_reason") == "length" for r in records)}
     with open(out / "meta.json", "w", encoding="utf-8") as f:
         json.dump(full_meta, f, indent=2)
     print(f"[gen] {len(records)} answers + meta -> {out}")
