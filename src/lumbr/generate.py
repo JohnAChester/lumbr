@@ -120,7 +120,7 @@ def build_messages(question: str, sources: list[dict], prompt: dict) -> list[dic
 # ---------------------------------------------------------------- answer parsing
 
 def _normalise(text: str) -> str:
-    return " ".join(text.lower().replace("’", "'").replace("‘", "'").split())
+    return " ".join(text.lower().replace(chr(0x2019), "'").replace(chr(0x2018), "'").split())
 
 
 def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
