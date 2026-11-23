@@ -133,7 +133,9 @@ def load_prompt(path: Path | str = PROMPT_PATH) -> dict:
 def build_messages(question: str, sources: list[dict], prompt: dict) -> list[dict]:
     """[system, user] chat messages: the numbered sources, then the question."""
     blocks = "\n\n".join(prompt["source_template"].format(**s) for s in sources)
-    user = prompt["user_template"].format(sources=blocks, question=question)
+    n = len(sources)
+    user = prompt["user_template"].format(sources=blocks, question=question, n_sources=n,
+                                          n_sources_text=f"{n} source" + ("" if n == 1 else "s"))
     return [{"role": "system", "content": prompt["system"]},
             {"role": "user", "content": user}]
 

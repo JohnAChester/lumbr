@@ -99,7 +99,7 @@ def test_prompt_file_is_self_consistent():
     prompt = generate.load_prompt()
     for key in ("version", "system", "user_template", "source_template", "abstain"):
         assert key in prompt
-    assert prompt["version"] == 1
+    assert isinstance(prompt["version"], int) and prompt["version"] >= 1
     assert len(prompt["sha256"]) == 64
     assert prompt["abstain"] in prompt["system"]
 
@@ -432,3 +432,26 @@ def test_summarize_round():
     assert s == {"n": 3, "abstained": 2, "info_not_found_abstained": "1/1",
                  "answerable_abstained_gold_present": 1, "answerable_answered_gold_missing": 1,
                  "answers_with_invalid_citations": 1, "truncated": 1}
+
+
+# ---------------------------------------------------------------- prompt v2: source count
+
+def test_build_messages_states_source_count():
+    prompt = generate.load_prompt()
+    sources = generate.build_sources([_pid("a", 0), _pid("b", 0)], _by_id(_doc("a", 1), _doc("b", 1)))
+    _, user = generate.build_messages("Q?", sources, prompt)
+    assert "You have 2 sources" in user["content"]
+    assert "[1] to [2]" in user["content"]
+
+
+def test_build_messages_single_source_wording():
+    prompt = generate.load_prompt()
+    sources = generate.build_sources([_pid("a", 0)], _by_id(_doc("a", 1)))
+    _, user = generate.build_messages("Q?", sources, prompt)
+    assert "You have 1 source," in user["content"]
+
+
+def test_prompt_has_no_literal_multi_citation_example():
+    # Round 1: the model copied the example "[1][3]" literally, citing [3] with only 1-2 sources.
+    system = generate.load_prompt()["system"]
+    assert "[1][3]" not in system and "[1, 3]" not in system
