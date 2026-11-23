@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from lumbr import chunk, schema
@@ -18,6 +19,7 @@ from lumbr import chunk, schema
 K = 5           # passages per question the generator sees
 NEIGHBOURS = 1  # chunks added on each side of a hit (D16)
 PROMPT_PATH = Path(__file__).parent / "prompts" / "answer.json"
+_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
 
 # ---------------------------------------------------------------- context
@@ -107,3 +109,30 @@ def build_messages(question: str, sources: list[dict], prompt: dict) -> list[dic
     user = prompt["user_template"].format(sources=blocks, question=question)
     return [{"role": "system", "content": prompt["system"]},
             {"role": "user", "content": user}]
+
+
+# ---------------------------------------------------------------- answer parsing
+
+def _normalise(text: str) -> str:
+    return " ".join(text.lower().replace("’", "'").replace("‘", "'").split())
+
+
+def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
+    """Citations mapped back to IDs, out-of-range citation numbers, and whether the answer abstains.
+
+    Accepts [2], [1][3] and [1, 3]. An answer abstains when it contains the abstention line and
+    cites nothing valid; a partial answer that cites a source and says what is missing does not.
+    """
+    by_n = {s["n"]: s for s in sources}
+    citations: list[dict] = []
+    invalid: list[int] = []
+    for m in _CITE.finditer(text):
+        for n in (int(x) for x in m.group(1).split(",")):
+            if n in by_n:
+                if all(c["n"] != n for c in citations):
+                    citations.append({"n": n, "passage_ids": by_n[n]["passage_ids"],
+                                      "doc_id": by_n[n]["doc_id"]})
+            elif n not in invalid:
+                invalid.append(n)
+    abstained = not citations and _normalise(prompt["abstain"]) in _normalise(text)
+    return {"citations": citations, "invalid_citations": invalid, "abstained": abstained}

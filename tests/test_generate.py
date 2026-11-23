@@ -131,3 +131,46 @@ def test_prompt_hash_ignores_line_endings(tmp_path):
     lf.write_bytes(text)
     crlf.write_bytes(text.replace(b"\n", b"\r\n"))
     assert generate.load_prompt(lf)["sha256"] == generate.load_prompt(crlf)["sha256"]
+
+
+# ---------------------------------------------------------------- Task 3: citations + abstention
+
+def _three_sources() -> list[dict]:
+    return generate.build_sources([_pid("a", 0), _pid("b", 0), _pid("c", 0)],
+                                  _by_id(_doc("a", 1), _doc("b", 1), _doc("c", 1)))
+
+
+def test_parse_citation_forms_and_invalid():
+    sources = _three_sources()
+    got = generate.parse_answer("A is true [1]. B too [1, 3]. C [3][2]. D [7].", sources,
+                                generate.load_prompt())
+    assert [c["n"] for c in got["citations"]] == [1, 3, 2]
+    assert got["citations"][1] == {"n": 3, "passage_ids": [_pid("c", 0)], "doc_id": "c"}
+    assert got["invalid_citations"] == [7]
+    assert got["abstained"] is False
+
+
+def test_abstention_exact():
+    prompt = generate.load_prompt()
+    got = generate.parse_answer(prompt["abstain"], _three_sources(), prompt)
+    assert got["abstained"] is True
+    assert got["citations"] == []
+
+
+def test_abstention_normalised():
+    text = "  i’m SORRY, but I can’t find  that information in our database. "
+    got = generate.parse_answer(text, _three_sources(), generate.load_prompt())
+    assert got["abstained"] is True
+
+
+def test_partial_answer_is_not_abstention():
+    text = "The launch is in May [2]. I'm sorry, but I can't find that information in our database."
+    got = generate.parse_answer(text, _three_sources(), generate.load_prompt())
+    assert got["abstained"] is False
+    assert [c["n"] for c in got["citations"]] == [2]
+
+
+def test_non_citation_brackets_ignored():
+    got = generate.parse_answer("Use the [beta] flag [1].", _three_sources(), generate.load_prompt())
+    assert [c["n"] for c in got["citations"]] == [1]
+    assert got["invalid_citations"] == []
