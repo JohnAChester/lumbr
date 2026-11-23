@@ -339,3 +339,18 @@ def test_save_records_paths_git_commit(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "git_commit", lambda: "abc1234")
     out = generate.save_answers(_records(), tmp_path, {}, date="2026-11-23")
     assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["git_commit"] == "abc1234"
+
+
+# ---------------------------------------------------------------- run folder naming + early check
+
+def test_run_tag_includes_prompt_version():
+    assert generate.run_tag("r1", {"version": 2}) == "gen_r1_p2"
+
+
+def test_answers_dir_raises_early_if_taken(tmp_path):
+    path = generate.answers_dir(tmp_path, "gen_r1_p1", "dev", date="2026-11-23")
+    assert path == tmp_path / "gen_r1_p1_dev_2026-11-23" and not path.exists()
+    generate.save_answers(_records(), tmp_path, {}, tag="gen_r1_p1", date="2026-11-23")
+    with pytest.raises(FileExistsError):
+        generate.answers_dir(tmp_path, "gen_r1_p1", "dev", date="2026-11-23")
+    assert generate.answers_dir(tmp_path, "gen_r1_p2", "dev", date="2026-11-23").name == "gen_r1_p2_dev_2026-11-23"

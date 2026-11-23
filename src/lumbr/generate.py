@@ -220,12 +220,30 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
     return records, wall_s
 
 
+def run_tag(retriever: str, prompt: dict) -> str:
+    """Run folder tag naming the retriever and the prompt version, e.g. `gen_r1_p2`."""
+    return f"gen_{retriever}_p{prompt['version']}"
+
+
+def answers_dir(runs_dir: Path, tag: str, split: str = "dev", date: str | None = None) -> Path:
+    """`{tag}_{split}_{date}` under runs_dir. Raises FileExistsError if it already exists.
+
+    Call it before generating, so a name clash stops the notebook before the GPU run, not after.
+    """
+    today = date or datetime.date.today().isoformat()
+    out = Path(runs_dir) / f"{tag}_{split}_{today}"
+    if out.exists():
+        raise FileExistsError(f"{out} already exists. Runs are never overwritten: bump the prompt "
+                              "version, or delete that folder by hand if it was a bad run.")
+    return out
+
+
 def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = "gen_r1",
                  split: str = "dev", date: str | None = None) -> Path:
     """Write `{tag}_{split}_{date}/answers.jsonl` + `meta.json`. Raises FileExistsError, never overwrites."""
     today = date or datetime.date.today().isoformat()
     git_sha = paths.git_commit()  # before anything is written, so a failed save leaves no folder
-    out = Path(runs_dir) / f"{tag}_{split}_{today}"
+    out = answers_dir(runs_dir, tag, split, today)
     out.mkdir(parents=True, exist_ok=False)
     with open(out / "answers.jsonl", "w", encoding="utf-8") as f:
         for r in records:
