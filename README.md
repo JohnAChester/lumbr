@@ -41,6 +41,10 @@ notebooks/
   05_john_subsample_r2.ipynb    R2 look-alikes + assemble splits/subsample_doc_ids.txt, GPU (#5)
   17_john_generator.ipynb       answer generator over the R1 dev run, prompt tuning, GPU (#14)
 splits/             committed ID lists: subsample_doc_ids.txt + manifest (#5)
+demo/
+  backend/          the demo search service: R2 retrieval + the study sources and messages (#18)
+  build/            builds its artifacts, threshold, questions and parse cases (#18)
+  content/          colleague DMs and parse cases for the demo site (#18)
   03_john_full_passages.ipynb   build processed/passages.jsonl (#4)
 docs/
   COLAB_SETUP.md    team setup guide
