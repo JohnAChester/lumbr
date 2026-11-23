@@ -25,7 +25,9 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "answer.json"
 # A batch of chat message lists in; one {"text", "prompt_tokens", "completion_tokens", "finish_reason"}
 # per input out, in order. finish_reason "length" means the answer was cut off at max_tokens.
 ChatFn = Callable[[list[list[dict]]], list[dict]]
-_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# [n] or [n, m]; not a markdown link like [869](https://...), which a model writes for PR numbers.
+_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\](?!\()")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
 # ---------------------------------------------------------------- context
@@ -293,6 +295,26 @@ def rescore_records(records: list[dict], prompt: dict) -> list[dict]:
     return [{**r, **parse_answer(r["answer"], r["sources"], prompt)} for r in records]
 
 
+def cited_share(records: list[dict]) -> float | None:
+    """Share of answer sentences (20+ characters, abstentions skipped) that carry a citation.
+
+    A citation placed right after a sentence's period ("... by June 5. [1][3]") counts for that
+    sentence. None when there are no answer sentences.
+    """
+    hit = total = 0
+    for r in records:
+        if r["abstained"]:
+            continue
+        chunks = [c for c in _SENTENCE_END.split(r["answer"].strip()) if c]
+        for i, c in enumerate(chunks):
+            if len(_CITE.sub("", c).strip()) < 20:
+                continue  # a bare "[3] [4]" fragment, not a sentence
+            total += 1
+            nxt = chunks[i + 1].lstrip() if i + 1 < len(chunks) else ""
+            hit += bool(_CITE.search(c) or _CITE.match(nxt))
+    return round(hit / total, 2) if total else None
+
+
 def summarize(records: list[dict], question_types: dict[str, str],
               gold_docs: dict[str, set[str]]) -> dict:
     """One round's headline numbers, for comparing prompt versions side by side.
@@ -313,4 +335,5 @@ def summarize(records: list[dict], question_types: dict[str, str],
         "answerable_answered_gold_missing": sum(not r["abstained"] and not gold_present(r) for r in answerable),
         "answers_with_invalid_citations": sum(bool(r["invalid_citations"]) for r in records),
         "truncated": sum(r.get("finish_reason") == "length" for r in records),
+        "share_sentences_cited": cited_share(records),
     }

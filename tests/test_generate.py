@@ -420,18 +420,19 @@ def test_rescore_records_reapplies_parsing():
 def test_summarize_round():
     recs = [
         {"question_id": "q1", "abstained": True, "invalid_citations": [], "finish_reason": "stop",
-         "sources": [{"doc_id": "g1"}]},                     # abstained with gold present
+         "sources": [{"doc_id": "g1"}], "answer": "I'm sorry, but I can't find that information in our database."},
         {"question_id": "q2", "abstained": False, "invalid_citations": [7], "finish_reason": "length",
-         "sources": [{"doc_id": "x"}]},                      # answered without gold
+         "sources": [{"doc_id": "x"}],
+         "answer": "The window is weekdays nine to four [1]. Freezes block all deploys entirely."},
         {"question_id": "q3", "abstained": True, "invalid_citations": [], "finish_reason": "stop",
-         "sources": []},                                     # info_not_found, abstained
+         "sources": [], "answer": "I'm sorry, but I can't find that information in our database."},
     ]
     types = {"q1": "basic", "q2": "basic", "q3": "info_not_found"}
     gold = {"q1": {"g1"}, "q2": {"g2"}, "q3": set()}
     s = generate.summarize(recs, types, gold)
     assert s == {"n": 3, "abstained": 2, "info_not_found_abstained": "1/1",
                  "answerable_abstained_gold_present": 1, "answerable_answered_gold_missing": 1,
-                 "answers_with_invalid_citations": 1, "truncated": 1}
+                 "answers_with_invalid_citations": 1, "truncated": 1, "share_sentences_cited": 0.5}
 
 
 # ---------------------------------------------------------------- prompt v2: source count
@@ -455,3 +456,33 @@ def test_prompt_has_no_literal_multi_citation_example():
     # Round 1: the model copied the example "[1][3]" literally, citing [3] with only 1-2 sources.
     system = generate.load_prompt()["system"]
     assert "[1][3]" not in system and "[1, 3]" not in system
+
+
+# ---------------------------------------------------------------- round 3: link false positives, density, v3
+
+def test_markdown_link_is_not_a_citation():
+    # Round 2, qst_0398: "PR [869](https://github.com/...)" was counted as citing source 869.
+    got = generate.parse_answer("Fixed in PR [869](https://github.com/x/y/pull/869) [1].",
+                                _three_sources(), generate.load_prompt())
+    assert [c["n"] for c in got["citations"]] == [1]
+    assert got["invalid_citations"] == []
+
+
+def test_cited_share_counts_citation_after_the_period():
+    recs = [
+        {"abstained": False, "answer": "Managers need 80% on the quiz. It is due by 2026-06-05. [1][3]"},
+        {"abstained": False, "answer": "Retention is ninety days [1]. Billing goes to the customer team."},
+        {"abstained": True, "answer": "I'm sorry, but I can't find that information in our database."},
+    ]
+    # 4 sentences of 20+ characters; cited: "due by ..." (citation right after its period) and "Retention ...".
+    assert generate.cited_share(recs) == 0.5
+
+
+def test_cited_share_without_answers_is_none():
+    assert generate.cited_share([{"abstained": True, "answer": "x"}]) is None
+
+
+def test_prompt_v3_uses_placeholder_citation_examples():
+    prompt = generate.load_prompt()
+    assert prompt["version"] >= 3
+    assert "[n]" in prompt["system"] and "[n][m]" in prompt["system"]
