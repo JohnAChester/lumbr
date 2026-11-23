@@ -334,3 +334,99 @@ def test_embed_progress_n_total_skips_line_count(tmp_path):
         _model=_FakeModel(),
     )
     assert n == 10
+
+
+# ---------------------------------------------------------------- R4 config
+
+def test_r4_config_distinct_tag():
+    assert index_dense.R4.index_tag == "r4"
+    assert index_dense.R4.index_tag not in {index_dense.R2.index_tag, index_dense.R3.index_tag}
+
+
+def test_r4_config_same_prefix_and_dtype_as_r2():
+    assert index_dense.R4.query_prefix == index_dense.R2.query_prefix
+    assert index_dense.R4.dtype == index_dense.R2.dtype == "fp16"
+
+
+def test_r4_config_name_is_bge_base():
+    assert "bge-base-en-v1.5" in index_dense.R4.name
+
+
+def test_r4_config_model_path_is_set():
+    assert index_dense.R4.model_path is not None
+    assert "r4" in index_dense.R4.model_path
+
+
+def test_r2_r3_have_no_model_path():
+    assert index_dense.R2.model_path is None
+    assert index_dense.R3.model_path is None
+
+
+def test_model_name_or_path_returns_model_path_when_set():
+    assert index_dense._model_name_or_path(index_dense.R4) == index_dense.R4.model_path
+
+
+def test_model_name_or_path_returns_name_when_path_is_none():
+    assert index_dense._model_name_or_path(index_dense.R2) == index_dense.R2.name
+    assert index_dense._model_name_or_path(index_dense.R3) == index_dense.R3.name
+
+
+def test_embed_passages_works_with_r4_config(tmp_path):
+    """R4 uses the same embedding pipeline as R2 — _FakeModel injection must work."""
+    passages = _make_passages(30)
+    pfile = tmp_path / "passages.jsonl"
+    _write_passages(passages, pfile)
+    iroot, lroot = tmp_path / "indexes", tmp_path / "local"
+    n = index_dense.embed_passages(
+        pfile, index_dense.R4,
+        index_root=iroot, local_root=lroot,
+        shard_size=20, batch_size=10, progress=False,
+        _model=_FakeModel(),
+    )
+    assert n == 30
+    shard_dir = iroot / "r4" / index_dense.EMB_SHARD_DIR
+    assert len(index_dense._done_ids(shard_dir)) == 30
+
+
+def test_save_run_meta_includes_model_path_for_r4(tmp_path):
+    passages = _make_passages(10)
+    pfile = tmp_path / "passages.jsonl"
+    _write_passages(passages, pfile)
+    iroot, lroot = tmp_path / "indexes", tmp_path / "local"
+    index_dense.embed_passages(
+        pfile, index_dense.R4,
+        index_root=iroot, local_root=lroot,
+        shard_size=10, batch_size=10, progress=False,
+        _model=_FakeModel(),
+    )
+    index_dense.build_index(index_dense.R4, index_root=iroot)
+    run = {f"q{i}": [(p["passage_id"], float(i)) for p in passages] for i in range(3)}
+
+    runs_dir = tmp_path / "runs"
+    subdir = index_dense.save_run(run, runs_dir, index_dense.R4, split="dev", k=10)
+    meta = json.loads((subdir / "meta.json").read_text())
+
+    assert meta["model_path"] == index_dense.R4.model_path
+    assert meta["model"] == index_dense.R4.name
+    assert meta["retriever"] == "r4"
+
+
+def test_save_run_meta_has_no_model_path_for_r2(tmp_path):
+    passages = _make_passages(10)
+    pfile = tmp_path / "passages.jsonl"
+    _write_passages(passages, pfile)
+    iroot, lroot = tmp_path / "indexes", tmp_path / "local"
+    index_dense.embed_passages(
+        pfile, index_dense.R2,
+        index_root=iroot, local_root=lroot,
+        shard_size=10, batch_size=10, progress=False,
+        _model=_FakeModel(),
+    )
+    index_dense.build_index(index_dense.R2, index_root=iroot)
+    run = {f"q{i}": [(p["passage_id"], float(i)) for p in passages] for i in range(3)}
+
+    runs_dir = tmp_path / "runs"
+    subdir = index_dense.save_run(run, runs_dir, index_dense.R2, split="dev", k=10)
+    meta = json.loads((subdir / "meta.json").read_text())
+
+    assert "model_path" not in meta

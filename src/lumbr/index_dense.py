@@ -1,4 +1,4 @@
-"""Dense embedding and FAISS index for R2 and R3 retrieval (issue #10).
+"""Dense embedding and FAISS index for R2, R3, and R4 retrieval (issue #10).
 
 Three independent steps — run them in order:
 
@@ -35,10 +35,11 @@ from lumbr import data, paths, schema
 
 @dataclass(frozen=True)
 class ModelConfig:
-    name: str           # HuggingFace model ID
-    index_tag: str      # subdir under indexes/: "r2" or "r3"
-    query_prefix: str   # prepended to every query at search time (not to passages)
-    dtype: str          # "fp16" (R2/BERT) or "bf16" (R3/Qwen3)
+    name: str                    # HuggingFace model ID (also used as lineage label in meta.json)
+    index_tag: str               # subdir under indexes/: "r2", "r3", or "r4"
+    query_prefix: str            # prepended to every query at search time (not to passages)
+    dtype: str                   # "fp16" (R2/R4/BERT) or "bf16" (R3/Qwen3)
+    model_path: str | None = None  # local/Drive path; overrides `name` in load_model when set
 
 
 R2 = ModelConfig(
@@ -61,6 +62,17 @@ R3 = ModelConfig(
         "\nQuery:"
     ),
     dtype="bf16",
+)
+
+# R4 — fine-tuned from bge-base-en-v1.5 (Jieun's hard-negative fine-tune, issue #10).
+# Weights live at paths.MODELS / "r4" on Drive; pooling and query prefix are identical to R2.
+# `name` records the base for lineage in meta.json; `model_path` is what load_model loads.
+R4 = ModelConfig(
+    name="BAAI/bge-base-en-v1.5",
+    index_tag="r4",
+    query_prefix="Represent this sentence for searching relevant passages:",
+    dtype="fp16",
+    model_path=str(paths.MODELS / "r4"),
 )
 
 # ---------------------------------------------------------------- paths / constants
@@ -96,7 +108,7 @@ def load_model(config: ModelConfig):
         except ImportError:
             model_kwargs["attn_implementation"] = "sdpa"
 
-    model = SentenceTransformer(config.name, model_kwargs=model_kwargs)
+    model = SentenceTransformer(_model_name_or_path(config), model_kwargs=model_kwargs)
     model.max_seq_length = 512  # passages are pre-chunked to ≤512 tokens
 
     # Decoder-only models (Qwen3) use last-token pooling: pad on the left so the
@@ -105,6 +117,11 @@ def load_model(config: ModelConfig):
         model.tokenizer.padding_side = "left"
 
     return model
+
+
+def _model_name_or_path(config: ModelConfig) -> str:
+    """Return the path/ID to pass to SentenceTransformer: local path if set, else HF ID."""
+    return config.model_path if config.model_path is not None else config.name
 
 
 # ---------------------------------------------------------------- shard helpers
@@ -408,6 +425,8 @@ def save_run(
         "git_commit":            git_sha,
         "date":                  today,
     }
+    if config.model_path is not None:
+        meta["model_path"] = config.model_path
     with open(subdir / "meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
     print(f"[{config.index_tag}] meta  → {subdir / 'meta.json'}")
