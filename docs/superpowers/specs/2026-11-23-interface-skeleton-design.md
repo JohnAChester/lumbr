@@ -36,7 +36,8 @@ prompt come from the study's own code, not a copy (the same "certainty and repro
 ## Findings that shape it
 
 - **11 of 100 dev questions** have all their gold documents in the v0 sample (8 basic, 1 project_related,
-  1 conflicting_info, 1 miscellaneous); **6 more** have no gold docs ("info not found"). 17 questions; a round uses 6.
+  1 conflicting_info, 1 miscellaneous). **4 more** are `info_not_found`. 15 questions; a round uses 6. (Two `high_level`
+  dev questions also have no gold docs, but they need the whole corpus, so they're left out.)
 - The site's current generator (`server/llm.ts`) has its own prompt citing `[doc_id]`, sends only 5 bare hits, uses
   `max_tokens` 400 and detects abstention with `startsWith`. All four change.
 - R2 queries are encoded as `query_prefix + q` with **no space** after
@@ -81,7 +82,8 @@ Claude's calls (correct any of these):
    `_CITE` (incl. `[n, m]`, excluding `[n](`) and `_starts_with_line` (≤ 2 inserted words, curly quotes, case,
    whitespace). A script in `lumbr` exports `parse_cases.json` (inputs + Python outputs + abstain line +
    `prompt_sha256`); the site commits it and tests `parseAnswer` against every case. Invalid citations are removed
-   from the shown text; valid `[n]` keep their numbers and link to source n.
+   from the shown text; valid `[n]` keep their numbers and link to source n; `[1, 3]` is shown as `[1][3]` so each
+   number becomes a chip.
 8. **LLM settings match the study:** temperature 0, `max_tokens` 512, `Qwen2.5-7B-Instruct` on an OpenAI-compatible
    pay-per-token host (provider is John's pick; quantised hosting is noted later in the About panel).
 9. **Index and model.** Encode the sample's passages with sentence-transformers (normalised); store **float32**
@@ -92,9 +94,9 @@ Claude's calls (correct any of these):
     `passage_id`, indexed by `(doc_id, chunk_idx)`.
 11. **Threshold (provisional):** the lowest top score among the 11 answerable questions minus 0.02, saved in
     `artifacts/config.json`. Only dev questions are read. Real tuning with an off-topic set is B5.
-12. **Content bundle:** `demo/build/build_questions.py` writes `questions.json` for the 17 questions, failing loudly
+12. **Content bundle:** `demo/build/build_questions.py` writes `questions.json` for the 15 questions, failing loudly
     if the dev split file is missing. Colleague DMs come from `demo/content/colleague_dms.csv`, drafted by Claude
-    for these 17 and reviewed by John. `cached: null`.
+    for these 15 and reviewed by John. `cached: null`.
 13. **Artifacts** (index, store, ONNX model, config) live in a private HF Hub repo and are fetched at build; never
     committed. For local runs they sit in `demo/backend/artifacts/` (git-ignored).
 14. **Importing the study code without its heavy deps.** `lumbr.generate` imports only the standard library
@@ -111,7 +113,7 @@ Claude's calls (correct any of these):
 | build artifacts: embed sample, ONNX export, SQLite store, threshold | `lumbr/demo/build/` | needs `processed/sample_passages.jsonl` from Drive |
 | service: encoder, index, store, `/retrieve` with sources + messages | `lumbr/demo/backend/` | FastAPI; tests with a hash encoder + fixtures |
 | `parse_cases.json` export | `lumbr/demo/build/` | from `generate.parse_answer` |
-| `questions.json` (17 questions) | `lumbr/demo/build/` → copied into the site | DMs reviewed by John |
+| `questions.json` (15 questions) | `lumbr/demo/build/` → copied into the site | DMs reviewed by John |
 | retrieval client + types for the new contract | `personal_site` `server/retrieval.ts`, `types.ts` | fake client updated too |
 | drop the site prompt; send backend messages; 512 tokens | `personal_site` `server/llm.ts`, `server/ask.ts` | `LlmClient.chat(messages, signal)` |
 | `parseAnswer` port + case tests; citations from sources | `personal_site` `citations.ts` | replaces `numberCitations` |
