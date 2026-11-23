@@ -25,6 +25,8 @@ train = ["sentence-transformers>=3.0", "accelerate", "datasets"]
 subsample = ["scikit-learn>=1.3", "scipy", "sentence-transformers>=3.0"]
 # 0.34.0 fails at start-up ("No module named 'cutlass'")
 generate = ["vllm<0.34"]
+# the demo search service (demo/backend); its tests run in CI
+demo = ["fastapi>=0.110", "httpx", "numpy", "onnxruntime", "tokenizers"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
@@ -32,3 +34,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 lumbr = ["prompts/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["demo/backend"]
