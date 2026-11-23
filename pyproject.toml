@@ -21,7 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 retrieval = ["sentence-transformers>=3.0", "faiss-cpu", "ranx"]
 bm25 = ["pyserini", "ranx"]
-train = ["sentence-transformers>=3.0", "accelerate"]
+train = ["sentence-transformers>=3.0", "accelerate", "datasets"]
 subsample = ["scikit-learn>=1.3", "scipy", "sentence-transformers>=3.0"]
 dev = ["pytest"]
 
