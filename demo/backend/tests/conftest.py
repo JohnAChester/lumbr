@@ -18,6 +18,13 @@ DOCS = {
     "dsid_ccc": ("jira", "gpu-quota", None, "Marcus Lin", [
         "GPU quota requests go through the capacity board every Tuesday.",
     ]),
+    "dsid_ddd": ("github", "release-notes", None, "Sean Gallagher", [
+        "Release 1.4 adds streaming responses.",
+        "Release 1.5 fixes idempotency key handling.",
+        "Release 1.6 adds batch embeddings.",
+        "Release 1.7 removes the legacy router.",
+        "Release 1.8 adds tracing headers.",
+    ]),
 }
 
 
@@ -46,3 +53,21 @@ def store(tmp_path, passages):
     path = tmp_path / "passages.sqlite"
     build_store(passages, path)
     return PassageStore(path)
+
+
+THRESHOLD = 0.2
+ANSWERABLE = "total request size limit 50 MiB multipart uploads"
+JUNK = "zzzz qqqq"
+
+
+@pytest.fixture
+def retriever(store, passages):
+    import numpy as np
+
+    from lumbr.generate import load_prompt
+    from lumbr_demo.encoder import HashEncoder
+    from lumbr_demo.index import DenseIndex
+    from lumbr_demo.service import Retriever
+    enc = HashEncoder()
+    index = DenseIndex(np.stack([enc.encode(p["text"]) for p in passages]), [p["passage_id"] for p in passages])
+    return Retriever(enc, index, store, load_prompt(), THRESHOLD, "test")
