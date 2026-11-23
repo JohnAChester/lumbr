@@ -174,3 +174,107 @@ def test_non_citation_brackets_ignored():
     got = generate.parse_answer("Use the [beta] flag [1].", _three_sources(), generate.load_prompt())
     assert [c["n"] for c in got["citations"]] == [1]
     assert got["invalid_citations"] == []
+
+
+# ---------------------------------------------------------------- Task 4: generate + save
+
+class _FakeChat:
+    """Answers each prompt with the scripted text for the question it contains; records every call."""
+
+    def __init__(self, replies: dict[str, str]):
+        self.replies = replies
+        self.calls: list[list[list[dict]]] = []
+
+    def __call__(self, batch):
+        self.calls.append(batch)
+        out = []
+        for messages in batch:
+            question = messages[-1]["content"].rsplit("Question: ", 1)[1]
+            out.append({"text": self.replies[question], "prompt_tokens": 100, "completion_tokens": 7})
+        return out
+
+
+def _run_fixture():
+    by_id = _by_id(_doc("a", 3), _doc("b", 2))
+    run = {"q1": [(_pid("a", 1), 9.0), (_pid("b", 0), 8.0)],
+           "q2": [(_pid("b", 1), 5.0)]}
+    return by_id, run
+
+
+def test_generate_end_to_end_with_fake_chat():
+    prompt = generate.load_prompt()
+    by_id, run = _run_fixture()
+    chat = _FakeChat({"Who owns A?": "Alice owns it [1].", "What about B?": prompt["abstain"]})
+    records, wall_s = generate.generate(chat, [("q1", "Who owns A?"), ("q2", "What about B?")],
+                                        run, by_id, prompt)
+    assert [r["question_id"] for r in records] == ["q1", "q2"]
+    r1, r2 = records
+    assert r1["citations"][0]["doc_id"] == "a" and r1["abstained"] is False
+    assert r1["sources"][0] == {"n": 1, "doc_id": "a", "passage_ids": [_pid("a", 1)],
+                                "window_ids": [_pid("a", 0), _pid("a", 1), _pid("a", 2)]}
+    assert r1["prompt_tokens"] == 100 and r1["completion_tokens"] == 7
+    assert r2["abstained"] is True
+    assert len(chat.calls) == 1 and len(chat.calls[0]) == 2
+    assert chat.calls[0][0][-1]["content"].endswith("Who owns A?")
+    assert wall_s >= 0
+
+
+def test_only_top_k_hits_used():
+    by_id = _by_id(*[_doc(f"d{i}", 1) for i in range(8)])
+    run = {"q": [(_pid(f"d{i}", 0), 10.0 - i) for i in range(8)]}
+    chat = _FakeChat({"Q?": "x [1]."})
+    [rec], _ = generate.generate(chat, [("q", "Q?")], run, by_id, generate.load_prompt(), k=5)
+    used = [pid for s in rec["sources"] for pid in s["passage_ids"]]
+    assert used == [_pid(f"d{i}", 0) for i in range(5)]
+
+
+def test_question_without_hits_abstains_without_model_call():
+    prompt = generate.load_prompt()
+    by_id, run = _run_fixture()
+    chat = _FakeChat({"Who owns A?": "Alice [1]."})
+    records, _ = generate.generate(chat, [("q1", "Who owns A?"), ("missing", "Nothing?")],
+                                   run, by_id, prompt)
+    rec = records[1]
+    assert rec["answer"] == prompt["abstain"] and rec["abstained"] is True
+    assert rec["sources"] == [] and rec["prompt_tokens"] == 0 and rec["completion_tokens"] == 0
+    assert len(chat.calls[0]) == 1
+
+    lonely = _FakeChat({})
+    [only], _ = generate.generate(lonely, [("missing", "Nothing?")], run, by_id, prompt)
+    assert only["abstained"] is True and lonely.calls == []
+
+
+def test_needed_doc_ids():
+    run = {"q1": [(_pid("a", 0), 3.0), (_pid("b", 0), 2.0), (_pid("c", 0), 1.0)],
+           "q2": [(_pid("z", 0), 1.0)]}
+    assert generate.needed_doc_ids(run, ["q1"], k=2) == {"a", "b"}
+
+
+def _records():
+    prompt = generate.load_prompt()
+    by_id, run = _run_fixture()
+    chat = _FakeChat({"Who owns A?": "Alice [1] [9].", "What about B?": prompt["abstain"]})
+    records, _ = generate.generate(chat, [("q1", "Who owns A?"), ("q2", "What about B?")],
+                                   run, by_id, prompt)
+    return records
+
+
+def test_save_writes_answers_and_meta(tmp_path):
+    records = _records()
+    out = generate.save_answers(records, tmp_path, {"model": "m"}, date="2026-11-23")
+    assert out == tmp_path / "gen_r1_dev_2026-11-23"
+    lines = (out / "answers.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == records
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+    assert meta["model"] == "m"
+    assert meta["n_questions"] == 2 and meta["n_abstained"] == 1 and meta["n_invalid_citations"] == 1
+    assert meta["date"] == "2026-11-23" and meta["git_commit"]
+
+
+def test_save_refuses_to_overwrite(tmp_path):
+    records = _records()
+    out = generate.save_answers(records, tmp_path, {}, date="2026-11-23")
+    before = (out / "answers.jsonl").read_bytes()
+    with pytest.raises(FileExistsError):
+        generate.save_answers(records[:1], tmp_path, {}, date="2026-11-23")
+    assert (out / "answers.jsonl").read_bytes() == before

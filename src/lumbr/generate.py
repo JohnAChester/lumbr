@@ -9,16 +9,22 @@ Design: docs/superpowers/specs/2026-11-23-answer-generator-design.md
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
+import subprocess
+import time
 from pathlib import Path
+from typing import Callable, Iterable
 
 from lumbr import chunk, schema
 
 K = 5           # passages per question the generator sees
 NEIGHBOURS = 1  # chunks added on each side of a hit (D16)
 PROMPT_PATH = Path(__file__).parent / "prompts" / "answer.json"
+# A batch of chat message lists in; one {"text", "prompt_tokens", "completion_tokens"} per input out.
+ChatFn = Callable[[list[list[dict]]], list[dict]]
 _CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
 
@@ -136,3 +142,74 @@ def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
                 invalid.append(n)
     abstained = not citations and _normalise(prompt["abstain"]) in _normalise(text)
     return {"citations": citations, "invalid_citations": invalid, "abstained": abstained}
+
+
+# ---------------------------------------------------------------- generation
+
+def make_vllm_chat(llm, sampling_params) -> ChatFn:
+    """ChatFn over a vLLM `LLM` (offline batch chat). Needs vLLM, so it is not unit-tested."""
+    def chat(batch: list[list[dict]]) -> list[dict]:
+        outs = llm.chat(batch, sampling_params, use_tqdm=True)
+        return [{"text": o.outputs[0].text,
+                 "prompt_tokens": len(o.prompt_token_ids),
+                 "completion_tokens": len(o.outputs[0].token_ids)} for o in outs]
+    return chat
+
+
+def needed_doc_ids(run: dict[str, list[tuple[str, float]]], question_ids: Iterable[str],
+                   k: int = K) -> set[str]:
+    """Doc IDs of the top-k hits of these questions (what `load_passages` must load)."""
+    return {schema.doc_id_of(pid) for q in question_ids for pid, _ in run.get(q, [])[:k]}
+
+
+def generate(chat: ChatFn, questions: list[tuple[str, str]],
+             run: dict[str, list[tuple[str, float]]], by_id: dict[str, dict], prompt: dict,
+             k: int = K, neighbours: int = NEIGHBOURS) -> tuple[list[dict], float]:
+    """Answer every question from its top-k hits in one batched `chat` call.
+
+    Returns (records in question order, wall-clock seconds of the chat call). A question with no
+    hits gets the abstention line without a model call.
+    """
+    prepared, batch = [], []
+    for qid, question in questions:
+        sources = build_sources([pid for pid, _ in run.get(qid, [])[:k]], by_id, neighbours)
+        prepared.append((qid, question, sources))
+        if sources:
+            batch.append(build_messages(question, sources, prompt))
+
+    start = time.perf_counter()
+    outputs = iter(chat(batch)) if batch else iter(())
+    wall_s = time.perf_counter() - start
+
+    records = []
+    for qid, question, sources in prepared:
+        out = next(outputs) if sources else {"text": prompt["abstain"],
+                                             "prompt_tokens": 0, "completion_tokens": 0}
+        records.append({
+            "question_id": qid, "question": question, "answer": out["text"],
+            **parse_answer(out["text"], sources, prompt),
+            "sources": [{key: s[key] for key in ("n", "doc_id", "passage_ids", "window_ids")}
+                        for s in sources],
+            "prompt_tokens": out["prompt_tokens"], "completion_tokens": out["completion_tokens"],
+        })
+    return records, wall_s
+
+
+def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = "gen_r1",
+                 split: str = "dev", date: str | None = None) -> Path:
+    """Write `{tag}_{split}_{date}/answers.jsonl` + `meta.json`. Raises FileExistsError, never overwrites."""
+    today = date or datetime.date.today().isoformat()
+    out = Path(runs_dir) / f"{tag}_{split}_{today}"
+    out.mkdir(parents=True, exist_ok=False)
+    with open(out / "answers.jsonl", "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    git_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True).stdout.strip() or "unknown"
+    full_meta = {**meta, "git_commit": git_sha, "date": today, "n_questions": len(records),
+                 "n_abstained": sum(r["abstained"] for r in records),
+                 "n_invalid_citations": sum(len(r["invalid_citations"]) for r in records)}
+    with open(out / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(full_meta, f, indent=2)
+    print(f"[gen] {len(records)} answers + meta -> {out}")
+    return out
