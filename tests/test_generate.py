@@ -492,14 +492,16 @@ def test_prompt_v3_uses_placeholder_citation_examples():
     assert "[n]" in prompt["system"] and "[n][m]" in prompt["system"]
 
 
-def test_prompt_v4_exact_question_rule():
-    # Round 3: answers from look-alike documents (qst_0032, qst_0448) and a hedge instead of the line (qst_0052).
+def test_prompt_v5_partial_answers_dont_open_with_abstention():
+    # Round 4 on Qwen3.5-9B opened partial answers with the abstention line (qst_0079, qst_0404),
+    # hiding answers it had found. v5 keeps the same-entity guard but drops "treat as not found".
     prompt = generate.load_prompt()
-    assert prompt["version"] >= 4
+    assert prompt["version"] >= 5
     system = prompt["system"]
-    assert "Answer only if a source answers this exact question" in system
-    # It must come before the abstention rule it points to.
-    assert system.index("this exact question") < system.index(prompt["abstain"])
+    assert "same project, system, customer or document" in system
+    assert "treat the answer as not found" not in system
+    assert "If no source answers any part of the question" in system
+    assert "Do not start a partial answer with the sentence above" in system
 
 
 # ---------------------------------------------------------------- small-to-big ablation
