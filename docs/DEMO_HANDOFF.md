@@ -62,6 +62,20 @@ plans are linked at the bottom.
 5. Fill `src/data/lumbr-demo/about.ts` with the served retriever, its study score, and how it differs (int8 index, rerank depth, multi-turn follow-ups not measured by the study).
 6. Play a round on the preview (desktop and phone), then merge.
 
+## Generator prompt (from #14)
+
+The demo must use the study's exact prompt: `src/lumbr/prompts/answer.json` in this repo (system prompt, source
+template, abstention line). Copy the file into `personal_site`, and check it against `prompt_sha256` in the
+`meta.json` of the study run the demo serves. **Hash it with line endings converted to LF**, the same way
+`generate.load_prompt` does, or a Windows checkout (CRLF) fails the check for an identical prompt:
+
+```ts
+import { createHash } from "node:crypto";
+const sha256 = createHash("sha256").update(raw.replace(/\r\n/g, "\n"), "utf8").digest("hex");
+```
+
+The abstention line is the demo's canned line, and citations are `[1]`..`[5]`, mapped back to passage IDs in code.
+
 ## Known minor issues (deferred, from review)
 
 - An in-flight Lumbr answer can land in a new round after "Start over".
