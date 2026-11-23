@@ -332,3 +332,10 @@ def test_duplicate_hits_skipped_and_counted(tmp_path):
 def test_needed_doc_ids_skips_duplicates():
     run = {"q": [(_pid("a", 0), 3.0), (_pid("a", 0), 2.0), (_pid("b", 0), 1.0)]}
     assert generate.needed_doc_ids(run, ["q"], k=2) == {"a", "b"}
+
+
+def test_save_records_paths_git_commit(tmp_path, monkeypatch):
+    from lumbr import paths
+    monkeypatch.setattr(paths, "git_commit", lambda: "abc1234")
+    out = generate.save_answers(_records(), tmp_path, {}, date="2026-11-23")
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["git_commit"] == "abc1234"

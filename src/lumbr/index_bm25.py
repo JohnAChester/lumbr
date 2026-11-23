@@ -260,10 +260,7 @@ def save_run(
     except importlib.metadata.PackageNotFoundError:
         pyserini_ver = "unknown"
 
-    git_sha = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip() or "unknown"
+    git_sha = paths.git_commit()
 
     meta = {
         "retriever":        "bm25",

@@ -13,12 +13,11 @@ import datetime
 import hashlib
 import json
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Iterable
 
-from lumbr import chunk, schema
+from lumbr import chunk, paths, schema
 
 K = 5           # passages per question the generator sees
 NEIGHBOURS = 1  # chunks added on each side of a hit (D16)
@@ -225,13 +224,12 @@ def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = 
                  split: str = "dev", date: str | None = None) -> Path:
     """Write `{tag}_{split}_{date}/answers.jsonl` + `meta.json`. Raises FileExistsError, never overwrites."""
     today = date or datetime.date.today().isoformat()
+    git_sha = paths.git_commit()  # before anything is written, so a failed save leaves no folder
     out = Path(runs_dir) / f"{tag}_{split}_{today}"
     out.mkdir(parents=True, exist_ok=False)
     with open(out / "answers.jsonl", "w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    git_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                             capture_output=True, text=True).stdout.strip() or "unknown"
     full_meta = {**meta, "git_commit": git_sha, "date": today, "n_questions": len(records),
                  "n_abstained": sum(r["abstained"] for r in records),
                  "n_invalid_citations": sum(len(r["invalid_citations"]) for r in records),

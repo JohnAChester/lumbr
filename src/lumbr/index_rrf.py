@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import subprocess
 from pathlib import Path
 
 from lumbr import paths
@@ -78,10 +77,7 @@ def save_run(
         json.dump(run, f)
     print(f"[{tag}] run saved → {run_path}")
 
-    git_sha = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip() or "unknown"
+    git_sha = paths.git_commit()
 
     meta = {
         "retriever":   tag,
