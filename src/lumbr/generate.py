@@ -9,12 +9,15 @@ Design: docs/superpowers/specs/2026-11-23-answer-generator-design.md
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from lumbr import chunk, schema
 
 K = 5           # passages per question the generator sees
 NEIGHBOURS = 1  # chunks added on each side of a hit (D16)
+PROMPT_PATH = Path(__file__).parent / "prompts" / "answer.json"
 
 
 # ---------------------------------------------------------------- context
@@ -82,3 +85,25 @@ def build_sources(hit_ids: list[str], by_id: dict[str, dict],
             "header": window[0]["header"], "body": "\n".join(parts),
         })
     return sources
+
+
+# ---------------------------------------------------------------- prompt
+
+def load_prompt(path: Path | str = PROMPT_PATH) -> dict:
+    """The prompt file's keys plus `sha256`, the fingerprint recorded in every run's meta.json.
+
+    The hash is taken with line endings normalised to LF, so a Windows (CRLF) checkout and a
+    Colab (LF) checkout of the same prompt get the same hash.
+    """
+    raw = Path(path).read_bytes().replace(b"\r\n", b"\n")
+    prompt = json.loads(raw.decode("utf-8"))
+    prompt["sha256"] = hashlib.sha256(raw).hexdigest()
+    return prompt
+
+
+def build_messages(question: str, sources: list[dict], prompt: dict) -> list[dict]:
+    """[system, user] chat messages: the numbered sources, then the question."""
+    blocks = "\n\n".join(prompt["source_template"].format(**s) for s in sources)
+    user = prompt["user_template"].format(sources=blocks, question=question)
+    return [{"role": "system", "content": prompt["system"]},
+            {"role": "user", "content": user}]

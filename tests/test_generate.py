@@ -91,3 +91,43 @@ def test_body_drops_carry_and_uses_first_header():
 def test_missing_hit_raises():
     with pytest.raises(KeyError):
         generate.build_sources([_pid("zzz", 0)], _by_id(_doc("a", 2)))
+
+
+# ---------------------------------------------------------------- Task 2: prompt
+
+def test_prompt_file_is_self_consistent():
+    prompt = generate.load_prompt()
+    for key in ("version", "system", "user_template", "source_template", "abstain"):
+        assert key in prompt
+    assert prompt["version"] == 1
+    assert len(prompt["sha256"]) == 64
+    assert prompt["abstain"] in prompt["system"]
+
+
+def test_build_messages_labels_sources_in_order():
+    prompt = generate.load_prompt()
+    sources = generate.build_sources([_pid("b", 0), _pid("a", 0)], _by_id(_doc("a", 1), _doc("b", 1)))
+    system, user = generate.build_messages("When do we ship?", sources, prompt)
+    assert system == {"role": "system", "content": prompt["system"]}
+    assert user["role"] == "user"
+    first = f"[1] {sources[0]['header']}\n{sources[0]['body']}"
+    second = f"[2] {sources[1]['header']}\n{sources[1]['body']}"
+    assert user["content"].index(first) < user["content"].index(second)
+    assert user["content"].endswith("When do we ship?")
+
+
+def test_prompt_hash_changes_with_content(tmp_path):
+    copy = tmp_path / "answer.json"
+    text = generate.PROMPT_PATH.read_text(encoding="utf-8")
+    copy.write_text(text, encoding="utf-8")
+    original = generate.load_prompt(copy)["sha256"]
+    copy.write_text(text.replace("Lumbr", "Lumbr!", 1), encoding="utf-8")
+    assert generate.load_prompt(copy)["sha256"] != original
+
+
+def test_prompt_hash_ignores_line_endings(tmp_path):
+    text = generate.PROMPT_PATH.read_bytes().replace(b"\r\n", b"\n")
+    lf, crlf = tmp_path / "lf.json", tmp_path / "crlf.json"
+    lf.write_bytes(text)
+    crlf.write_bytes(text.replace(b"\n", b"\r\n"))
+    assert generate.load_prompt(lf)["sha256"] == generate.load_prompt(crlf)["sha256"]
