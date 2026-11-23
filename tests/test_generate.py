@@ -420,19 +420,23 @@ def test_rescore_records_reapplies_parsing():
 def test_summarize_round():
     recs = [
         {"question_id": "q1", "abstained": True, "invalid_citations": [], "finish_reason": "stop",
-         "sources": [{"doc_id": "g1"}], "answer": "I'm sorry, but I can't find that information in our database."},
+         "sources": [{"doc_id": "g1"}], "answer": "I'm sorry, but I can't find that information in our database.",
+         "prompt_tokens": 300},
         {"question_id": "q2", "abstained": False, "invalid_citations": [7], "finish_reason": "length",
          "sources": [{"doc_id": "x"}],
-         "answer": "The window is weekdays nine to four [1]. Freezes block all deploys entirely."},
+         "answer": "The window is weekdays nine to four [1]. Freezes block all deploys entirely.",
+         "prompt_tokens": 300},
         {"question_id": "q3", "abstained": True, "invalid_citations": [], "finish_reason": "stop",
-         "sources": [], "answer": "I'm sorry, but I can't find that information in our database."},
+         "sources": [], "answer": "I'm sorry, but I can't find that information in our database.",
+         "prompt_tokens": 0},
     ]
     types = {"q1": "basic", "q2": "basic", "q3": "info_not_found"}
     gold = {"q1": {"g1"}, "q2": {"g2"}, "q3": set()}
     s = generate.summarize(recs, types, gold)
     assert s == {"n": 3, "abstained": 2, "info_not_found_abstained": "1/1",
                  "answerable_abstained_gold_present": 1, "answerable_answered_gold_missing": 1,
-                 "answers_with_invalid_citations": 1, "truncated": 1, "share_sentences_cited": 0.5}
+                 "answers_with_invalid_citations": 1, "truncated": 1, "share_sentences_cited": 0.5,
+                 "mean_prompt_tokens": 300.0}
 
 
 # ---------------------------------------------------------------- prompt v2: source count
@@ -496,3 +500,24 @@ def test_prompt_v4_exact_question_rule():
     assert "Answer only if a source answers this exact question" in system
     # It must come before the abstention rule it points to.
     assert system.index("this exact question") < system.index(prompt["abstain"])
+
+
+# ---------------------------------------------------------------- small-to-big ablation
+
+def test_run_tag_marks_non_default_neighbours():
+    prompt = {"version": 4}
+    assert generate.run_tag("r1", prompt) == "gen_r1_p4"               # default context keeps the old name
+    assert generate.run_tag("r1", prompt, neighbours=1) == "gen_r1_p4"
+    assert generate.run_tag("r1", prompt, neighbours=0) == "gen_r1_p4_n0"
+
+
+def test_ablation_run_does_not_collide_with_default(tmp_path):
+    generate.save_answers(_records(), tmp_path, {}, tag=generate.run_tag("r1", {"version": 4}), date="2026-11-23")
+    path = generate.answers_dir(tmp_path, generate.run_tag("r1", {"version": 4}, neighbours=0), "dev", date="2026-11-23")
+    assert path.name == "gen_r1_p4_n0_dev_2026-11-23" and not path.exists()
+
+
+def test_no_neighbours_gives_hit_only_windows():
+    by_id = _by_id(_doc("a", 5))
+    [src] = generate.build_sources([_pid("a", 2)], by_id, neighbours=0)
+    assert src["window_ids"] == [_pid("a", 2)]

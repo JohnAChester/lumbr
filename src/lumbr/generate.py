@@ -246,9 +246,14 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
     return records, wall_s
 
 
-def run_tag(retriever: str, prompt: dict) -> str:
-    """Run folder tag naming the retriever and the prompt version, e.g. `gen_r1_p2`."""
-    return f"gen_{retriever}_p{prompt['version']}"
+def run_tag(retriever: str, prompt: dict, neighbours: int = NEIGHBOURS) -> str:
+    """Run folder tag naming the retriever and prompt version, e.g. `gen_r1_p4`.
+
+    A non-default context size is added, e.g. `gen_r1_p4_n0` for the small-to-big ablation
+    (hits only, no neighbours), so it never collides with the default run.
+    """
+    tag = f"gen_{retriever}_p{prompt['version']}"
+    return tag if neighbours == NEIGHBOURS else f"{tag}_n{neighbours}"
 
 
 def answers_dir(runs_dir: Path, tag: str, split: str = "dev", date: str | None = None) -> Path:
@@ -336,4 +341,6 @@ def summarize(records: list[dict], question_types: dict[str, str],
         "answers_with_invalid_citations": sum(bool(r["invalid_citations"]) for r in records),
         "truncated": sum(r.get("finish_reason") == "length" for r in records),
         "share_sentences_cited": cited_share(records),
+        "mean_prompt_tokens": round(sum(t) / len(t), 1) if (t := [r["prompt_tokens"] for r in records
+                                                                   if r.get("prompt_tokens")]) else None,
     }
