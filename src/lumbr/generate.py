@@ -148,12 +148,42 @@ def _normalise(text: str) -> str:
     return " ".join(text.lower().replace(chr(0x2019), "'").replace(chr(0x2018), "'").split())
 
 
+ABSTAIN_EXTRA_WORDS = 2  # words a model may insert into the abstention line ("that specific information")
+
+
+def _words(text: str) -> list[str]:
+    """Normalised words with surrounding punctuation stripped ("database." -> "database", "can't" kept)."""
+    return [w for w in (t.strip(".,;:!?\"()[]") for t in _normalise(text).split()) if w]
+
+
+def _starts_with_line(text: str, line: str, extra: int = ABSTAIN_EXTRA_WORDS) -> bool:
+    """True if `text` opens with every word of `line`, in order, with at most `extra` words inserted.
+
+    The first word must match the text's first word; words may be added, never dropped or swapped.
+    """
+    want, got = _words(line), _words(text)
+    if not want or not got or got[0] != want[0]:
+        return False
+    j = skipped = 0
+    for w in got:
+        if j == len(want):
+            break
+        if w == want[j]:
+            j += 1
+        else:
+            skipped += 1
+            if skipped > extra:
+                return False
+    return j == len(want)
+
+
 def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
     """Citations mapped back to IDs, out-of-range citation numbers, and whether the answer abstains.
 
     Accepts [2], [1][3] and [1, 3]. An answer abstains when it starts with the abstention line
-    (normalised, final period optional), even if it then explains what the sources do cover and cites
-    them. A partial answer gives its answer first, so it does not count as an abstention.
+    (normalised, punctuation ignored, up to ABSTAIN_EXTRA_WORDS words inserted, e.g. "that specific
+    information"), even if it then explains what the sources do cover and cites them. A partial
+    answer gives its answer first, so it does not count as an abstention.
     """
     by_n = {s["n"]: s for s in sources}
     citations: list[dict] = []
@@ -166,8 +196,7 @@ def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
                                       "doc_id": by_n[n]["doc_id"]})
             elif n not in invalid:
                 invalid.append(n)
-    line = _normalise(prompt["abstain"]).rstrip(".!")  # a dropped final period still counts
-    abstained = _normalise(text).startswith(line)
+    abstained = _starts_with_line(text, prompt["abstain"])
     return {"citations": citations, "invalid_citations": invalid, "abstained": abstained}
 
 

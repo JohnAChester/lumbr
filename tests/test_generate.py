@@ -526,3 +526,31 @@ def test_no_neighbours_gives_hit_only_windows():
 def test_run_tag_for_reranked_retriever():
     assert generate.run_tag("r5_r6", {"version": 4}) == "gen_r5_r6_p4"
     assert generate.run_tag("r5_r6", {"version": 4}, neighbours=0) == "gen_r5_r6_p4_n0"
+
+
+# ---------------------------------------------------------------- abstention: small wording changes
+
+def test_abstention_with_one_inserted_word():
+    # R1 hits-only, qst_0482: "can't find that specific information" was counted as an answer.
+    text = "I'm sorry, but I can't find that specific information in our database. The sources mention ..."
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is True
+
+
+def test_abstention_with_two_inserted_words():
+    text = "I'm sorry, but I really can't find that exact information in our database."
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is True
+
+
+def test_three_inserted_words_is_not_abstention():
+    text = "I'm sorry, but I can't find that specific piece of information in our database."
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
+
+
+def test_abstention_must_start_the_answer_even_with_insertions():
+    text = "Well, I'm sorry, but I can't find that specific information in our database."
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
+
+
+def test_missing_words_are_not_abstention():
+    text = "I'm sorry, I can't find that in our database."  # words dropped, not inserted
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
