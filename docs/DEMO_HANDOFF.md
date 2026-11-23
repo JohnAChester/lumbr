@@ -23,7 +23,7 @@ plans are linked at the bottom.
   matches sentence-transformers (cosine ≥ 0.999, same top 5 on 20 dev questions), ~18 ms per `/retrieve` locally.
 - `/retrieve` returns the top-5 hits, their **small-to-big sources** and the **finished chat messages**, built by
   `lumbr.generate` itself, so the demo's context and prompt are the study's (prompt v4).
-- The site sends those messages to the LLM (temperature 0, 512 tokens) and parses answers with a TypeScript port of
+- The site sends those messages to the LLM (temperature 0, 768 tokens, the study's Qwen3.5-9B setting) and parses answers with a TypeScript port of
   `parse_answer`, pinned by `parse_cases.json` exported from the Python tests. `[1, 3]` shows as two chips, out-of-range
   numbers are dropped, and abstentions with up to 2 inserted words count as the canned line.
 - **Generator: Qwen3.5-9B** with thinking off (`qwen/qwen3.5-9b` on OpenRouter, bf16 providers only). Qwen2.5-7B-Instruct
