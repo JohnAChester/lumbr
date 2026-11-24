@@ -1,6 +1,8 @@
 """Answer-parsing cases for the site's TypeScript parseAnswer (spec #18, decision 7).
 
 Each case is run through lumbr.generate.parse_answer; the site's tests must give the same results.
+The file also carries the abstention rule's refusal patterns (generate.REFUSAL_PATTERNS), which the
+site's parser reads at runtime instead of keeping its own copy (abstention spec 2026-11-23).
 
     python demo/build/export_parse_cases.py --out demo/content/parse_cases.json
 """
@@ -18,6 +20,19 @@ ROOT = Path(__file__).resolve().parents[2]
 def sources(n: int) -> list[dict]:
     """n placeholder sources: parse_answer only needs n, passage_ids and doc_id."""
     return [{"n": i, "doc_id": f"dsid_{i}", "passage_ids": [f"dsid_{i}#000"]} for i in range(1, n + 1)]
+
+
+# The lead rule (abstain_rule 2): text, then whether it abstains. All use 5 sources.
+LEAD_CASES: list[tuple[str, bool]] = [
+    ("Based on the provided sources, there is no record of a Teams integration. "
+     "Source [3] describes the Slack bot [3].", True),                      # own-words refusal that cites
+    ("Here are the requirements:\n* There is no limit on retries [1].\n* Timeouts are 30 s [2].", False),
+    ("The sources do not specify the queue-depth threshold. The interleaving ratio is 0.6 [1].", True),
+    ("I can’t answer that from these sources [2].", True),             # curly apostrophe
+    ("\n\nThere is no mention of that in the sources.", True),              # leading blank lines
+    ("There is no rate limit on Dedicated [2].", True),                     # negative fact: known trade-off
+    ("The limit is 10 MiB [2]. I cannot answer the second part.", False),   # refusal after the lead
+]
 
 
 def texts(abstain: str) -> list[tuple[str, int]]:
@@ -44,7 +59,7 @@ def texts(abstain: str) -> list[tuple[str, int]]:
         ("The rollout date is May 4 [2]. " + abstain, 5),
         ("", 0),
         ("No citations at all.", 3),
-    ]
+    ] + [(text, 5) for text, _ in LEAD_CASES]
 
 
 def build() -> dict:
@@ -54,7 +69,9 @@ def build() -> dict:
         got = generate.parse_answer(text, sources(n), prompt)
         cases.append({"text": text, "n_sources": n, "citations": [c["n"] for c in got["citations"]],
                       "invalid_citations": got["invalid_citations"], "abstained": got["abstained"]})
-    return {"prompt_sha256": prompt["sha256"], "abstain": prompt["abstain"], "cases": cases}
+    return {"prompt_sha256": prompt["sha256"], "abstain": prompt["abstain"],
+            "abstain_rule": generate.ABSTAIN_RULE, "refusal_patterns": list(generate.REFUSAL_PATTERNS),
+            "cases": cases}
 
 
 def main() -> None:
