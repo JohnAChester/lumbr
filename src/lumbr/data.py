@@ -64,7 +64,12 @@ def copy_atomic(src, dst) -> None:
 
 
 def stage_local(force: bool = False) -> dict[str, Path]:
-    """Copy raw parquet files from Drive to local disk for fast reads this session."""
+    """Copy raw parquet files from Drive to local disk for fast reads this session.
+
+    Creates the local folder itself, so scripts run as their own process (demo/build) work without
+    calling paths.ensure_dirs() first.
+    """
+    paths.LOCAL_RAW.mkdir(parents=True, exist_ok=True)
     out = {}
     for key in FILES:
         src = paths.RAW / _local_name(key)
