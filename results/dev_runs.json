@@ -1,0 +1,19 @@
+{
+  "note": "One pinned run folder per setup under lumbr-data/runs/. Inventory on 2026-11-23 found exactly one dated folder per tag, so no choice was needed. The last four rows come from notebook 17 (L4, commit eee2e84), run 2026-11-23. The two depth-100 rows are a dev-only experiment (fused to the full R1 ∪ R3 union, then reranked); their folders are dated 2026-11-24 because Colab runs on UTC.",
+  "runs": {
+    "R1 BM25": "r1_bm25_dev_2026-11-21",
+    "R2 bge-base": "r2_dev_2026-11-21",
+    "R3 Qwen3-Embedding-4B": "r3_dev_2026-11-22",
+    "R4 fine-tuned bge-base": "r4_dev_2026-11-23",
+    "R5 = RRF(R1, R3)": "r5_rrf_dev_2026-11-22",
+    "R1 + rerank": "r1_r6_dev_2026-11-22",
+    "R3 + rerank": "r3_r6_dev_2026-11-22",
+    "R5 + rerank (R6)": "r5_r6_dev_2026-11-22",
+    "R2 + rerank": "r2_r6_dev_2026-11-23",
+    "R4 + rerank": "r4_r6_dev_2026-11-23",
+    "R1+R4 RRF": "r1_r4_rrf_dev_2026-11-23",
+    "R1+R4 + rerank": "r1_r4_r6_dev_2026-11-23",
+    "R5 RRF, depth 100 (experiment)": "r5_rrf100_dev_2026-11-24",
+    "R5 + rerank, depth 100 (experiment)": "r5_100_r6_dev_2026-11-24"
+  }
+}
