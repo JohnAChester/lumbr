@@ -110,6 +110,27 @@ An answer abstains when its **lead** meets either of these conditions:
 - John hand-checks the list of flips before merge.
 - Python and TypeScript agree on every case in `parse_cases.json`.
 
+### Result (hand check, 2026-11-24)
+
+- **Rescore:**
+  - The 11 dev runs give 23 answered → abstained flips and none the other way. The 24th, qst_0367, is
+    the known false hit above: its lead is a markdown intro line, which the line-break cut now drops.
+  - The four L4 runs give 27 flips, identical to notebook 17's inlined rule.
+- **John's hand check of all 50 flips:** 42 are real refusals and 8 are false hits. On the 11 original
+  runs, 19 are refusals and 4 are false hits.
+  - **Real refusals:** the 42 include over-literal refusals with the gold doc retrieved and its facts
+    quoted (qst_0114, 0252, 0320, and 0194 on R6). The model declines the question, so they count as
+    abstained, and #23's judge grades the facts.
+- **The 8 false hits, accepted as a known cost:**
+  - **Hedge, then a full answer** (qst_0194 R1 ×2, 0292 ×3): "there is no single source/change …",
+    then the right facts.
+  - **Hedge, then a confident answer from a look-alike** (qst_0110).
+  - **Refuses one part, answers the other** (qst_0404 ×2). The rule counts this as abstained on purpose
+    (the four new parse cases); the alternative is the out-of-scope "partial" label.
+- **Why the patterns stay as they are:** the false hits' wording ("no single …", "do not specify a single
+  …") also opens real refusals (qst_0218 R1, 0187 R6, 0168). Narrowing a pattern would lose those, so the
+  patterns are unchanged.
+
 ## Not in scope
 
 - **Changing the prompt** so the model answers paraphrased questions and answers the parts it can.
