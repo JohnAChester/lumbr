@@ -1,0 +1,147 @@
+{
+  "prompt_sha256": "7b75d5029b2d8d2d9f0cf28395689a6709db6fcbd69815ea1a738d5c08e336d3",
+  "abstain": "I'm sorry, but I can't find that information in our database.",
+  "cases": [
+    {
+      "text": "The limit is 10 MiB [2].",
+      "n_sources": 3,
+      "citations": [
+        2
+      ],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "Both apply [1][3].",
+      "n_sources": 3,
+      "citations": [
+        1,
+        3
+      ],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "Both apply [1, 3].",
+      "n_sources": 3,
+      "citations": [
+        1,
+        3
+      ],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "It ships in May [7].",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [
+        7
+      ],
+      "abstained": false
+    },
+    {
+      "text": "See [2](http://example.com) for details [1].",
+      "n_sources": 2,
+      "citations": [
+        1
+      ],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "Cite like [n] and [n][m].",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "Mixed [1, 9] here.",
+      "n_sources": 2,
+      "citations": [
+        1
+      ],
+      "invalid_citations": [
+        9
+      ],
+      "abstained": false
+    },
+    {
+      "text": "Repeated [1] and again [1].",
+      "n_sources": 1,
+      "citations": [
+        1
+      ],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "I'm sorry, but I can't find that information in our database.",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": true
+    },
+    {
+      "text": "I'm sorry, but I can't find that specific detailed information in our database.",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": true
+    },
+    {
+      "text": "I'm sorry, but I can't find that specific detailed pricing information in our database.",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "I’m sorry, but I can’t find that information in our database.",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": true
+    },
+    {
+      "text": "i'm sorry, but i can't find that information in our database.",
+      "n_sources": 5,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": true
+    },
+    {
+      "text": "I'm sorry, but I can't find that information in our database. The sources do cover the rollout date [2].",
+      "n_sources": 5,
+      "citations": [
+        2
+      ],
+      "invalid_citations": [],
+      "abstained": true
+    },
+    {
+      "text": "The rollout date is May 4 [2]. I'm sorry, but I can't find that information in our database.",
+      "n_sources": 5,
+      "citations": [
+        2
+      ],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "",
+      "n_sources": 0,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": false
+    },
+    {
+      "text": "No citations at all.",
+      "n_sources": 3,
+      "citations": [],
+      "invalid_citations": [],
+      "abstained": false
+    }
+  ]
+}

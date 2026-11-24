@@ -34,3 +34,7 @@ venv/
 
 # Playwright MCP screenshots/logs
 .playwright-mcp/
+
+# Demo search service artifacts (index, store, ONNX model): fetched, never committed
+demo/backend/artifacts/
+demo/content/questions.json
