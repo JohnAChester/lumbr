@@ -598,3 +598,52 @@ def test_summarize_counts_leaked_think_tags():
     recs = [{"question_id": "q1", "abstained": False, "invalid_citations": [], "finish_reason": "stop",
              "sources": [], "answer": "<think>" + chr(10) + "hmm</think> It is 5 [1].", "prompt_tokens": 10}]
     assert generate.summarize(recs, {"q1": "basic"}, {"q1": set()})["think_tags"] == 1
+
+
+# ---------------------------------------------------------------- abstention rule 2: the lead decides
+
+def test_lead_cuts_at_line_break_or_sentence_end():
+    assert generate._lead("Here are the rules:\n* There is no cap [1].") == "Here are the rules:"
+    assert generate._lead("First one. Second one.") == "First one."
+    assert generate._lead("\n\n  Only sentence") == "Only sentence"
+    assert generate._lead("Version 2.5 is out. Next.") == "Version 2.5 is out."
+
+
+def test_refusal_patterns_are_the_spec_list_and_ascii():
+    assert generate.REFUSAL_PATTERNS == (
+        r"\bthere is no\b", r"\bno (record|mention|information|single source)\b",
+        r"\bcan(not|'t) answer\b",
+        r"\b(sources|documents) do(es)? not (contain|mention|specify|include|provide|describe)\b")
+    assert all(p.isascii() for p in generate.REFUSAL_PATTERNS)
+
+
+@pytest.mark.parametrize("text", [
+    "Based on the provided sources, there is no record of a Teams integration. Source [3] covers Slack [3].",
+    "There is no mention of FP8 thresholds in the sources [1].",
+    "I cannot answer that from these sources.",
+    "I can’t answer that from these sources.",
+    "The sources do not specify the queue-depth threshold. The interleaving ratio is 0.6 [1].",
+    "\n\nNo information about that is available [2].",
+])
+def test_own_words_refusal_in_lead_abstains_even_when_citing(text):
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is True
+
+
+@pytest.mark.parametrize("text", [
+    "Here are the requirements:\n* There is no limit on retries [1].\n* Timeouts are 30 s [2].",
+    "The limit is 10 MiB [2]. There is no second limit.",
+    "The rollout date is May 4 [2]. I'm sorry, but I can't find that information in our database.",
+])
+def test_refusal_outside_the_lead_does_not_abstain(text):
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
+
+
+def test_negative_fact_answer_counts_as_abstained_by_rule():
+    # Known trade-off (abstention spec): a correct "there is no ..." answer reads as a refusal.
+    got = generate.parse_answer("There is no rate limit on Dedicated [2].", _three_sources(), generate.load_prompt())
+    assert got["abstained"] is True
+
+
+def test_save_records_abstain_rule(tmp_path):
+    out = generate.save_answers(_records(), tmp_path, {"model": "m"}, date="2026-11-24")
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["abstain_rule"] == 2
