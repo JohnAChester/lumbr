@@ -23,7 +23,6 @@ from __future__ import annotations
 import datetime
 import importlib.metadata
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -409,10 +408,7 @@ def save_run(
     except importlib.metadata.PackageNotFoundError:
         st_ver = "unknown"
 
-    git_sha = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip() or "unknown"
+    git_sha = paths.git_commit()
 
     meta = {
         "retriever":             config.index_tag,

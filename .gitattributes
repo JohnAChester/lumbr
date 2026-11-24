@@ -1,0 +1,3 @@
+# The generator prompt is fingerprinted (SHA-256) in every run and checked by the demo,
+# so its bytes must be identical on every machine (see src/lumbr/generate.py load_prompt).
+src/lumbr/prompts/*.json text eol=lf
