@@ -24,3 +24,15 @@ def test_cases_cover_both_outcomes():
     cases = json.loads(CASES.read_text(encoding="utf-8"))["cases"]
     assert any(c["abstained"] for c in cases) and any(not c["abstained"] for c in cases)
     assert any(c["invalid_citations"] for c in cases)
+
+
+def test_exports_the_refusal_patterns():
+    data = json.loads(CASES.read_text(encoding="utf-8"))
+    assert data["refusal_patterns"] == list(generate.REFUSAL_PATTERNS)
+    assert data["abstain_rule"] == generate.ABSTAIN_RULE
+
+
+def test_cases_cover_the_lead_rule():
+    texts = {c["text"]: c["abstained"] for c in json.loads(CASES.read_text(encoding="utf-8"))["cases"]}
+    for t, want in epc.LEAD_CASES:
+        assert texts[t] is want, t
