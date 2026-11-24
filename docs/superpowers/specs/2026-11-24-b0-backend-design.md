@@ -23,9 +23,27 @@ R2 on the v0 sample, so it has to change to serve the study's B0 on the full cor
 | Matches the study | Exactly: the same Lucene index, k1 = 0.9, b = 0.4, the same analyzer | Different tokenizer, so results drift |
 | Server needs | Java 21, about 1–1.5 GB for the JVM | Nothing extra |
 
-John chose Pyserini. The server is a VM (AWS Lightsail), not a Vercel function, so Java is cheap. Rough
-memory: R4 matrix in float32 is 2.4 GB, the JVM about 1–1.5 GB, plus Python and ONNX, so about 4 GB in all.
-That means **the 8 GB Lightsail plan**.
+John chose Pyserini. The server is a VM (AWS Lightsail), not a Vercel function, so Java is cheap.
+
+**Memory target: the 4 GB plan ($24/month), not the 8 GB one ($44/month)** (John, 2026-11-24). The demo is
+always on, so the backend loads data lean without giving up any of B0's recall:
+
+| Part | How it's held | Estimate |
+|---|---|---|
+| R4 vectors (772K × 768) | float16 file, memory-mapped, scored in 64K-row float32 chunks | ~1.2 GB of reclaimable OS cache, ~0.2 GB of temporary space per query |
+| BM25 | Lucene memory-maps its index; JVM heap capped with `-Xmx` (`LUMBR_JVM_HEAP`, default `1g`) | ≤ 1 GB of heap, plus cache |
+| Passage store | SQLite on disk, a few rows read per query | small |
+| R4 query encoder | ONNX in fp32 (int8 would change the query vectors) | ~0.5 GB |
+
+That's about 2–2.5 GB of memory the process holds, plus cache the OS can drop.
+
+**float16, not int8, for the vectors:**
+- Casting float16 to float32 is exact, as the study's `load_index` did, so rankings match the study's.
+- int8 would save about another 0.6 GB of cache, but changes the scores, so it could cost recall.
+- Plan: add int8 only if the 4 GB measurement is tight, and only after the parity check confirms recall.
+
+**Measuring:** `check_parity.py` reports peak RSS, anonymous memory (what the process really holds) and
+file-backed memory (reclaimable mapped pages) after all 100 dev queries. The plan is chosen from those numbers.
 
 ## Design
 

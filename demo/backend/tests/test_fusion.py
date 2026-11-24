@@ -159,3 +159,46 @@ def test_rrf_ties_go_to_the_bm25_order(store):
     swapped = [pid for pid, _ in index_rrf.fuse([dense_run, lex_run], k=60, top_n=50)["q"]]
     assert study != swapped  # the order matters for this pair, so the test can tell them apart
     assert r.retrieve("anything", k=2)["hit_ids"] == study
+
+
+def test_lucene_caps_the_jvm_heap_before_the_jvm_starts(monkeypatch, tmp_path):
+    """The 4 GB server needs a bounded JVM: -Xmx goes to pyjnius before Pyserini starts the JVM."""
+    import sys
+    import types
+
+    from lumbr_demo.lexical import LuceneBM25
+    options = []
+    jc = types.SimpleNamespace(vm_running=False, add_options=lambda *o: options.extend(o))
+    opened = []
+
+    class FakeSearcher:
+        def __init__(self, path):
+            opened.append(path)
+
+    lucene = types.ModuleType("pyserini.search.lucene")
+    lucene.LuceneSearcher = FakeSearcher
+    monkeypatch.setitem(sys.modules, "jnius_config", jc)
+    monkeypatch.setitem(sys.modules, "pyserini", types.ModuleType("pyserini"))
+    monkeypatch.setitem(sys.modules, "pyserini.search", types.ModuleType("pyserini.search"))
+    monkeypatch.setitem(sys.modules, "pyserini.search.lucene", lucene)
+    monkeypatch.setenv("LUMBR_JVM_HEAP", "768m")
+    LuceneBM25(tmp_path / "bm25")
+    assert options == ["-Xmx768m"] and opened == [str(tmp_path / "bm25")]
+
+
+def test_lucene_heap_default_is_1g(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from lumbr_demo.lexical import LuceneBM25
+    options = []
+    monkeypatch.setitem(sys.modules, "jnius_config",
+                        types.SimpleNamespace(vm_running=False, add_options=lambda *o: options.extend(o)))
+    lucene = types.ModuleType("pyserini.search.lucene")
+    lucene.LuceneSearcher = lambda path: None
+    for name in ("pyserini", "pyserini.search"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "pyserini.search.lucene", lucene)
+    monkeypatch.delenv("LUMBR_JVM_HEAP", raising=False)
+    LuceneBM25(tmp_path)
+    assert options == ["-Xmx1g"]

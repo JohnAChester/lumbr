@@ -51,7 +51,7 @@ def concat_shards(shard_dir: Path) -> tuple[np.ndarray, list[str]]:
 
 
 def write_dense(matrix: np.ndarray, ids: list[str], out: Path) -> None:
-    """fp16 on disk (half the download); lumbr_demo.index.DenseIndex casts to fp32 on load, as the study did."""
+    """fp16 on disk (half the download and half the page cache); DenseIndex scores it as fp32 chunks, as the study cast it."""
     np.save(Path(out) / "embeddings.npy", matrix.astype(np.float16, copy=False))
     (Path(out) / "ids.json").write_text(json.dumps(ids), encoding="utf-8")
 

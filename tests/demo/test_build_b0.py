@@ -50,7 +50,7 @@ def test_write_dense_round_trips_through_the_service_index(tmp_path):
     b0.write_dense(m, ["a", "b", "c"], tmp_path)
     assert np.load(tmp_path / "embeddings.npy").dtype == np.float16  # half the download
     idx = DenseIndex.load(tmp_path)
-    assert idx.matrix.dtype == np.float32 and idx.search(np.array([0, 1, 0], np.float32), 1)[0][0] == "b"
+    assert idx.matrix.dtype == np.float16 and idx.search(np.array([0, 1, 0], np.float32), 1)[0][0] == "b"
 
 
 def test_check_ids_match_store(tmp_path):
@@ -86,3 +86,13 @@ def test_compare_top_k():
     got = cp.compare_top_k(served, study, k=2)
     assert got == {"n": 2, "identical": 1, "same_set": 1, "mean_overlap": pytest.approx(0.75),
                    "missing": ["q3"], "differ": ["q2"]}
+
+
+def test_memory_report_splits_anonymous_from_file_backed():
+    status = ("Name:\tpython\nVmHWM:\t 3145728 kB\nVmRSS:\t 2097152 kB\n"
+              "RssAnon:\t 1048576 kB\nRssFile:\t 1048576 kB\nRssShmem:\t 0 kB\n")
+    assert cp.memory_report(status) == {"peak_rss_mb": 3072, "rss_mb": 2048, "anon_mb": 1024, "file_mb": 1024}
+
+
+def test_memory_report_without_proc():
+    assert cp.memory_report(None) == {}
