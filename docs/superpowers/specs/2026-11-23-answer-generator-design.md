@@ -52,7 +52,7 @@ Decided with John:
 
 Claude's calls (correct any of these):
 
-4. **Model: `Qwen/Qwen2.5-7B-Instruct`**, vLLM offline `LLM.chat`, L4 GPU. Ungated (Llama needs a licence
+4. **Model: `Qwen/Qwen2.5-7B-Instruct`** *(superseded 2026-11-23, see "Model switch" below)*, vLLM offline `LLM.chat`, L4 GPU. Ungated (Llama needs a licence
    approval), Jieun's notebook already runs Qwen on vLLM, and hosted versions exist for the demo.
    Temperature 0, `max_tokens` 512, `max_model_len` 8192 (5 windows of up to 3 × 512 tokens fit).
 5. **Pinned for reproducibility:** model revision (commit hash), vLLM version, sampling params, prompt SHA-256,
@@ -92,3 +92,19 @@ Claude's calls (correct any of these):
 
 The exact prompt wording (it starts as a draft and gets tuned in the notebook), function signatures, and the
 exact notebook number.
+
+## Model switch (2026-11-23, decided with John)
+
+Qwen2.5-7B-Instruct was retired by the pay-per-token hosts (OpenRouter: "no provider serves this model anymore";
+DeepInfra and the Hugging Face router no longer list it), so the demo could not serve the study's generator. Qwen3-8B
+was considered first but is not hosted either. The generator becomes **`Qwen/Qwen3.5-9B`** (Apache-2.0, ungated,
+~9.7B parameters, served in bf16 by DeepInfra, Parasail and PrimeIntellect on OpenRouter), with **thinking off**
+(`enable_thinking=False` in vLLM; reasoning disabled at the host). Everything else is unchanged: prompt v4,
+temperature 0, `max_tokens` 512, `max_model_len` 8192, small-to-big context.
+
+Validation on dev before adopting: run v4 over the 100 dev questions (R1), compare `summarize` against the
+Qwen2.5 v4 run, hand-check the same 20 answers, and tune further only if it regresses. Then rerun the
+small-to-big comparison (R1, R6) so the writeup's numbers match the model. Runs save with the model in the folder
+name (`gen_r1_p4_qwen3.5-9b_dev_<date>`); folders without a suffix are Qwen2.5-7B-Instruct.
+Risks to check in the first cell: the 9.7B weights (~19 GB bf16) must fit the L4 with an 8K context, and the pinned
+vLLM (<0.34) must support the architecture.

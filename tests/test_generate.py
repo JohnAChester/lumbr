@@ -436,7 +436,7 @@ def test_summarize_round():
     assert s == {"n": 3, "abstained": 2, "info_not_found_abstained": "1/1",
                  "answerable_abstained_gold_present": 1, "answerable_answered_gold_missing": 1,
                  "answers_with_invalid_citations": 1, "truncated": 1, "share_sentences_cited": 0.5,
-                 "mean_prompt_tokens": 300.0}
+                 "mean_prompt_tokens": 300.0, "think_tags": 0}
 
 
 # ---------------------------------------------------------------- prompt v2: source count
@@ -554,3 +554,47 @@ def test_abstention_must_start_the_answer_even_with_insertions():
 def test_missing_words_are_not_abstention():
     text = "I'm sorry, I can't find that in our database."  # words dropped, not inserted
     assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
+
+
+# ---------------------------------------------------------------- Qwen3.5-9B switch
+
+class _FakeOut:
+    def __init__(self, text):
+        self.prompt_token_ids = [1, 2, 3]
+        self.outputs = [type("O", (), {"text": text, "token_ids": [9], "finish_reason": "stop"})()]
+
+
+class _FakeLLM:
+    def __init__(self):
+        self.kwargs = None
+
+    def chat(self, batch, sampling_params, **kwargs):
+        self.kwargs = kwargs
+        return [_FakeOut("ok") for _ in batch]
+
+
+def test_vllm_chat_passes_chat_template_kwargs():
+    llm = _FakeLLM()
+    out = generate.make_vllm_chat(llm, "sp", chat_template_kwargs={"enable_thinking": False})([[{"role": "user", "content": "x"}]])
+    assert llm.kwargs["chat_template_kwargs"] == {"enable_thinking": False}
+    assert out == [{"text": "ok", "prompt_tokens": 3, "completion_tokens": 1, "finish_reason": "stop"}]
+
+
+def test_vllm_chat_without_template_kwargs_sends_none():
+    llm = _FakeLLM()
+    generate.make_vllm_chat(llm, "sp")([[{"role": "user", "content": "x"}]])
+    assert "chat_template_kwargs" not in llm.kwargs
+
+
+def test_run_tag_names_new_models_and_keeps_legacy_names():
+    prompt = {"version": 4}
+    assert generate.run_tag("r1", prompt) == "gen_r1_p4"
+    assert generate.run_tag("r1", prompt, model="Qwen/Qwen2.5-7B-Instruct") == "gen_r1_p4"   # #14's runs
+    assert generate.run_tag("r1", prompt, model="Qwen/Qwen3.5-9B") == "gen_r1_p4_qwen3.5-9b"
+    assert generate.run_tag("r5_r6", prompt, neighbours=0, model="Qwen/Qwen3.5-9B") == "gen_r5_r6_p4_n0_qwen3.5-9b"
+
+
+def test_summarize_counts_leaked_think_tags():
+    recs = [{"question_id": "q1", "abstained": False, "invalid_citations": [], "finish_reason": "stop",
+             "sources": [], "answer": "<think>" + chr(10) + "hmm</think> It is 5 [1].", "prompt_tokens": 10}]
+    assert generate.summarize(recs, {"q1": "basic"}, {"q1": set()})["think_tags"] == 1
