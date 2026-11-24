@@ -91,13 +91,20 @@ An answer abstains when its **lead** meets either of these conditions:
 
 - Rescoring the 11 dev runs flips exactly the reviewed set to abstained. The expected set is the 24
   above, minus any false hits found in the hand check. No answer flips from abstained to answered.
+- The same check runs on the four L4 dev runs from 2026-11-24 (`gen_r1_p4`, `gen_r1_p6`, `gen_r5_r6_p4`
+  and `gen_r5_r6_p6`, each `_qwen3.5-9b_dev_2026-11-24`, on Drive). Their flips join the hand-checked list.
+  The inlined rule in notebook 17's Prompt A/B cell already caught every v4 refusal in them, and the
+  shipped rule must give the same abstention decisions as that cell on all four.
 - John hand-checks the list of flips before merge.
 - Python and TypeScript agree on every case in `parse_cases.json`.
 
 ## Not in scope
 
 - **Changing the prompt** so the model answers paraphrased questions and answers the parts it can.
-  That is suggested by the 12 gold-retrieved refusals, but it's a separate tuning round.
+  The 12 gold-retrieved refusals suggested it, and it has since been tried: rounds 5 (2026-11-23) and 6
+  (2026-11-24) both loosened rule 3, and neither was adopted. Each fixed a few literal refusals but
+  answered more questions from look-alike documents (notebook 17's rounds table). `answer.json` stays at v4,
+  so this detector has to handle v4's own-words refusals.
 - **A "partial" label.**
 - **Regenerating any run.** Rescoring is enough.
 
