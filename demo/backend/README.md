@@ -1,9 +1,17 @@
 # Lumbr demo search service
 
-Serves the "First Day at Redwood" demo (`personal_site`, `/projects/lumbr-enterprise-rag/demo`): R2 dense
-retrieval, the similarity filter, and the study's own sources + chat messages from `lumbr.generate`
-(prompt v4, small-to-big). The site sends those messages to the LLM and parses the answer.
+Serves the "First Day at Redwood" demo (`personal_site`, `/projects/lumbr-enterprise-rag/demo`): retrieval,
+the similarity filter, and the study's own sources + chat messages from `lumbr.generate` (prompt v4,
+small-to-big). The site sends those messages to the LLM and parses the answer.
 Design: `docs/superpowers/specs/2026-11-23-interface-skeleton-design.md` (#18).
+
+**What it retrieves with depends on the artifacts:**
+- **B0** (the demo's setup, `docs/superpowers/specs/2026-11-24-b0-backend-design.md`): R1 BM25 (the study's
+  Lucene index via Pyserini, Java 21+) and R4 dense, top 50 each, fused with the study's RRF (k = 60, R1 first).
+  `config.json` has `"lexical": "bm25"`. Built from the study's outputs by notebook 19.
+- **Dense only** (R2), the v0 sample build below, used for local development. No Java needed.
+
+The similarity filter always reads the dense top cosine.
 
 ## Endpoints
 
@@ -45,3 +53,11 @@ plus the LLM variables, and `npm run dev`.
 python demo/build/build_questions.py --artifacts demo/backend/artifacts --out demo/content/questions.json
 python demo/build/export_parse_cases.py   # demo/content/parse_cases.json, copied to the site's tests
 ```
+
+## Full B0 artifacts (Colab, notebook 19)
+
+`notebooks/19_john_b0_artifacts.ipynb` runs `demo/build/build_b0_artifacts.py` on the study's R4 shards, R4
+model, R1 Lucene index and passages; `demo/build/check_parity.py` (every dev question through this service's
+`Retriever`, compared with the study's `r1_r4_rrf` dev run: recall@10 must match 0.766); `pick_threshold.py`;
+then uploads to a private Hugging Face dataset repo. Serving it needs `pip install -e ".[demo,demo-b0]"` and
+Java 21+.

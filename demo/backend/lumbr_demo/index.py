@@ -15,9 +15,19 @@ class DenseIndex:
         self.ids = list(ids)
 
     def search(self, q: np.ndarray, k: int) -> list[tuple[str, float]]:
-        """Top-k (id, cosine) pairs, best first; ties broken by id."""
+        """Top-k (id, cosine) pairs, best first; ties broken by id.
+
+        A partial sort keeps this fast on the full corpus (~770K passages): every candidate
+        scoring at least the k-th best score is kept, so ties at the cut are still broken by id.
+        """
         scores = self.matrix @ np.asarray(q, dtype=np.float32)
-        order = sorted(range(len(self.ids)), key=lambda i: (-scores[i], self.ids[i]))[:k]
+        n = len(self.ids)
+        if k < n:
+            kth = np.partition(scores, n - k)[n - k]
+            candidates = np.flatnonzero(scores >= kth)
+        else:
+            candidates = np.arange(n)
+        order = sorted(candidates.tolist(), key=lambda i: (-scores[i], self.ids[i]))[:k]
         return [(self.ids[i], float(scores[i])) for i in order]
 
     def save(self, directory: Path) -> None:
