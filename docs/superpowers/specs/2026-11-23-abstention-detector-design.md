@@ -85,7 +85,19 @@ An answer abstains when its **lead** meets either of these conditions:
 **personal_site**
 - `citations.ts`'s `parseAnswer` applies the same lead rule, using the `refusal_patterns` exported in
   `parse_cases.json` instead of a hand-copied list. The existing parse-case test pins it.
-- **The demo's behaviour:** when the lead refuses, the visitor sees the canned line, as today.
+- **The demo's behaviour (changed 2026-11-24, John):** the demo no longer swaps a model refusal for the
+  canned line. When the lead refuses but the model said more, for example what the sources do and don't
+  cover, the visitor sees the model's own text with its citation chips. It's treated like any other
+  answer: it joins the conversation history, and its sources carry into follow-ups.
+  - The exact canned line is still shown when the similarity filter blocks the question (no model call),
+    and when the model's whole reply is a single refusal sentence (the canned line or an own-words refusal) with no citations.
+    That keeps one consistent bare "can't find" reply.
+  - **Why:** the explanation is often the most useful part of a refusal. It's what the info-not-found gold
+    answers ask for, and it's what the demo exists to show: a grounded answer that says what it doesn't
+    know.
+  - **Accepted cost:** some explanations describe look-alike documents (qst_0267) and could read like an
+    answer to a visitor who skims.
+  - This changes only what the demo shows. The study's abstention count is unchanged.
 
 ## Acceptance
 

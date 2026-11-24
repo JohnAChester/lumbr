@@ -244,7 +244,8 @@ git commit -m "Parse cases: export the refusal patterns and lead-rule cases for 
 
 **Interfaces:**
 - Consumes: `parse_cases.json` `refusal_patterns: string[]` (Task 4).
-- Produces: `parseAnswer(text, nSources, abstainLine)`. The signature and return shape are unchanged, so `ask.ts` needs no change. When the lead refuses, the visitor sees the canned line, as today.
+- Produces: `parseAnswer(text, nSources, abstainLine)`, with the signature and return shape unchanged.
+- Also modify: `src/lib/lumbr-demo/server/ask.ts` (line 111) and `tests/lumbr-demo/ask.test.ts`. This is the spec's changed demo behaviour: a model refusal is shown in the model's own words, and only a bare canned reply becomes `CANNED_LINE`.
 
 - [ ] **Step 1: Move the file and copy in the new export**
 
@@ -285,6 +286,50 @@ Expected: all pass, with no type errors. `resolveJsonModule` is already on, sinc
 ```bash
 git add -A src/lib/lumbr-demo tests/lumbr-demo
 git commit -m "Lumbr demo: abstain on a refusal in the answer's lead, patterns from parse_cases.json (lumbr #14)"
+```
+
+- [ ] **Step 6: Write the failing `ask.ts` tests** in `tests/lumbr-demo/ask.test.ts`, using that file's existing fake deps, with an LLM stub returning the given text and 5 sources
+
+```ts
+it("shows a model refusal that explains, in its own words, with citation chips", async () => {
+  const raw = "I'm sorry, but I can't find that information in our database. The sources confirm the us-east rollout [2] but not the account names.";
+  const out = await askWith(raw);
+  expect(out.kind).toBe("answer");
+  expect(out.text).toBe(displayText(raw, 5));
+  expect(out.citations.map((c) => c.n)).toEqual([2]);
+  expect(out.contextIds.length).toBeGreaterThan(0);
+});
+
+it("shows an own-words refusal as the model wrote it", async () => {
+  const out = await askWith("Based on the sources, there is no record of a Teams integration. Source [3] covers Slack [3].");
+  expect(out.kind).toBe("answer");
+});
+
+it("turns a bare canned reply, even with inserted words, into the exact canned line", async () => {
+  const out = await askWith("I'm sorry, but I can't find that specific information in our database.");
+  expect(out).toMatchObject({ kind: "canned", text: CANNED_LINE, citations: [] });
+});
+```
+
+`askWith(raw)` is `askLumbr(ask("q"), deps({ llm: spyLlm(() => raw) }))`, built from the file's existing `spyLlm`, `deps` and `ask` helpers. Add one bare own-words case too: `"I cannot answer that from these sources."` gives kind `"canned"`.
+
+- [ ] **Step 7: Run and watch the first two fail**
+
+Run: `npx vitest run tests/lumbr-demo/ask.test.ts`
+Expected: the first two FAIL (`kind` is `"canned"`). The third passes already; it guards the bare case.
+
+- [ ] **Step 8: Change `ask.ts`.** Replace line 111 with: if `parsed.abstained && parsed.citations.length === 0 && lead(raw) === raw.trim()`, return `reply("canned", CANNED_LINE)`; otherwise fall through to the normal answer return. Export `lead` from `citations.ts` for this. Update the header comment: refusals with an explanation are shown in the model's words (abstention spec, demo behaviour).
+
+- [ ] **Step 9: Run all site tests, the type check and lint**
+
+Run: `npx vitest run && npx tsc --noEmit && npm run lint`
+Expected: all pass, no errors.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/lib/lumbr-demo tests/lumbr-demo
+git commit -m "Lumbr demo: show the model's own refusal with its citations; canned line only for a bare refusal (lumbr #14)"
 ```
 
 `git add` is scoped to those two paths, so John's untracked `content/projects/cigna-*` files stay out.
