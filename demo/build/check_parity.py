@@ -5,11 +5,16 @@ Pass: recall@10 matches the study's (0.766) and the top-10 lists are (nearly) al
 differences can come from the query encoder (ONNX fp32 on CPU here, sentence-transformers fp16 on GPU
 in the study); anything larger means the demo isn't serving the study's setup.
 
+It also reports memory, for choosing the Lightsail plan (target: the 4 GB plan). Linux counts touched pages of
+memory-mapped files (the dense vectors, the Lucene index) in RSS, but the OS can drop those at will; "anon_mb"
+is what the process really holds (Python, the JVM heap, ONNX), "file_mb" is reclaimable cache.
+
     python demo/build/check_parity.py --artifacts /content/b0_artifacts --study-run <runs/r1_r4_rrf_dev_...>
 """
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from pathlib import Path
@@ -18,6 +23,28 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "demo" / "backend"))
 
 DEV_IDS = ROOT / "splits" / "dev_question_ids.txt"
+
+
+_STATUS_FIELDS = {"VmHWM": "peak_rss_mb", "VmRSS": "rss_mb", "RssAnon": "anon_mb", "RssFile": "file_mb"}
+
+
+def memory_report(status: str | None) -> dict:
+    """MB figures from /proc/self/status text (Linux); {} where /proc isn't available."""
+    if not status:
+        return {}
+    out = {}
+    for line in status.splitlines():
+        key, _, rest = line.partition(":")
+        if key in _STATUS_FIELDS and rest.strip().endswith("kB"):
+            out[_STATUS_FIELDS[key]] = int(rest.split()[0]) // 1024
+    return out
+
+
+def _proc_status() -> str | None:
+    try:
+        return Path("/proc/self/status").read_text()
+    except OSError:
+        return None
 
 
 def compare_top_k(served: dict, study: dict, k: int) -> dict:
@@ -77,7 +104,9 @@ def main() -> None:
     times.sort()
     report = {"served_recall@10": round(recall(served), 4), "study_recall@10": round(recall(study), 4),
               "top10": compare_top_k(served, study, 10),
-              "latency_s": {"median": round(times[len(times) // 2], 3), "p95": round(times[int(len(times) * 0.95)], 3)}}
+              "latency_s": {"median": round(times[len(times) // 2], 3), "p95": round(times[int(len(times) * 0.95)], 3)},
+              "memory_after_all_dev_queries": memory_report(_proc_status()),
+              "jvm_heap_cap": os.environ.get("LUMBR_JVM_HEAP", "1g")}
     print(json.dumps(report, indent=2))
 
 
