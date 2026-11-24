@@ -1,6 +1,6 @@
 # Which setup the demo serves: the rule, fixed before the test runs (#26, #22)
 
-**Date:** 2026-11-24 · **Status:** draft, for the team to agree before #22 runs
+**Date:** 2026-11-24 · **Status:** draft, for the team to agree before #22 runs · **Outcome (dev): B0 is served, see "Result"**
 
 ## Why write it down first
 
@@ -81,6 +81,27 @@ Nothing here waits for #22:
   Vercel, it becomes the candidate to beat.
 
 When #22 lands, apply the rule. Switching between candidates is a config change.
+
+## Result: notebook 18 (dev, 2026-11-24)
+
+| Setup | recall@10 | nDCG@10 | MRR@10 |
+|---|---|---|---|
+| R1 (BM25) | 0.665 | 0.594 | 0.611 |
+| **B0: R1+R4 RRF** | **0.766** | **0.650** | **0.648** |
+| R1 + MiniLM @10 / @20 / @50 | 0.655 / 0.681 / 0.723 | 0.576 / 0.572 / 0.594 | 0.586 / 0.569 / 0.582 |
+| R1+R4 + MiniLM @10 / @20 / @50 | 0.746 / 0.766 / 0.774 | 0.623 / 0.623 / 0.624 | 0.622 / 0.611 / 0.608 |
+| R1 + study reranker @50 | 0.802 | 0.700 | 0.695 |
+| R1+R4 + study reranker @50 | 0.819 | 0.721 | 0.718 |
+
+- **The small reranker doesn't help B0.** At the depths that pass the speed gate (10 and 20), it matches or loses
+  recall@10, and it lowers nDCG and MRR at every depth: it puts the right document lower in the list.
+  MiniLM was trained on web search (MS MARCO) and doesn't transfer to this corpus. Depth 50 gains 0.8 points of
+  recall, which is within noise on 94 questions, and it's too slow anyway.
+- **So B0 is the demo setup.** It's the only candidate that passes the gate and isn't dominated. Under the rule, a
+  MiniLM variant within 2 points loses the tie-break to the faster B0, and A0 trails by 10 points. #22 can't change
+  this choice, so the demo build doesn't wait for it. #22 still reports B0's test score.
+- **Hosting:** the full corpus (~2–3 GB of passage text plus the indexes) doesn't fit a Vercel function, so the
+  search service moves to a small always-on AWS Lightsail server (2 vCPU, 4–8 GB). The site stays on Vercel.
 
 ## Open for the team
 
