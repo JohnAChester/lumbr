@@ -1,0 +1,18 @@
+# Installed as /etc/systemd/system/lumbr-pin.service
+# Every B0 query scans the whole FAISS fp16 index (1.13 GB). On the 4 GB plan the kernel kept pushing
+# parts of it out of the page cache, and re-reading them from disk stalled queries for 8-60 s.
+# vmtouch locks the file's pages in RAM so they can't be evicted.
+[Unit]
+Description=Keep the lumbr FAISS index locked in RAM (scanned in full on every query)
+Before=lumbr-search.service
+After=local-fs.target
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/vmtouch -q -l -d -P /run/lumbr-pin.pid -m 2G /srv/lumbr/artifacts/dense_sq_fp16.faiss
+PIDFile=/run/lumbr-pin.pid
+LimitMEMLOCK=infinity
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

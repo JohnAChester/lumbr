@@ -25,7 +25,7 @@ echo "== packages"
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   openjdk-21-jdk-headless python3-venv python3-dev build-essential git curl \
-  nginx certbot python3-certbot-nginx >/dev/null
+  nginx certbot python3-certbot-nginx vmtouch >/dev/null
 
 echo "== service user and code"
 sudo useradd --system --create-home --home-dir /srv/lumbr --shell /usr/sbin/nologin lumbr 2>/dev/null || true
@@ -53,9 +53,10 @@ fi
 echo "== systemd unit and warm-up"
 sudo install -d -m 755 /usr/local/lib/lumbr
 sudo install -m 755 "$HERE/warmup.sh" /usr/local/lib/lumbr/warmup.sh
+sudo install -m 644 "$HERE/lumbr-pin.service" /etc/systemd/system/lumbr-pin.service
 sudo install -m 644 "$HERE/lumbr-search.service" /etc/systemd/system/lumbr-search.service
 sudo systemctl daemon-reload
-sudo systemctl enable lumbr-search >/dev/null
+sudo systemctl enable lumbr-pin lumbr-search >/dev/null
 
 echo "== nginx"
 sudo install -m 644 "$HERE/nginx-ratelimit.conf" /etc/nginx/conf.d/lumbr-ratelimit.conf
@@ -70,7 +71,7 @@ cat <<EOF
 Done with the automatic part. Remaining manual steps (README.md):
   1. ssh -t ubuntu@<ip> "sudo -u lumbr -H /srv/lumbr/venv/bin/hf auth login --no-add-to-git-credential"
   2. sudo -u lumbr -H /srv/lumbr/venv/bin/hf download johnchester/lumbr-demo-b0 --repo-type dataset --local-dir /srv/lumbr/artifacts
-  3. sudo systemctl start lumbr-search        # ~3.5 min: pre-reads indexes, runs warm-up queries
+  3. sudo systemctl start lumbr-pin lumbr-search   # locks the FAISS index in RAM; ~3.5 min warm-up
   4. Point the $DOMAIN A record at this server (Cloudflare: DNS only), then:
      sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email --redirect
 EOF

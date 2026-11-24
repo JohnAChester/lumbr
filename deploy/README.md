@@ -28,6 +28,7 @@ Vercel site --HTTPS + Bearer key--> nginx :443 (Let's Encrypt, 10 req/s per IP, 
 |---|---|
 | [`lightsail/setup.sh`](lightsail/setup.sh) | run once on a fresh server |
 | [`lightsail/lumbr-search.service`](lightsail/lumbr-search.service) | `/etc/systemd/system/lumbr-search.service` |
+| [`lightsail/lumbr-pin.service`](lightsail/lumbr-pin.service) | `/etc/systemd/system/lumbr-pin.service` |
 | [`lightsail/warmup.sh`](lightsail/warmup.sh) | `/usr/local/lib/lumbr/warmup.sh` |
 | [`lightsail/nginx-lumbr.conf`](lightsail/nginx-lumbr.conf) | `/etc/nginx/sites-available/lumbr` (certbot then adds HTTPS) |
 | [`lightsail/nginx-ratelimit.conf`](lightsail/nginx-ratelimit.conf) | `/etc/nginx/conf.d/lumbr-ratelimit.conf` |
@@ -40,6 +41,11 @@ Vercel site --HTTPS + Bearer key--> nginx :443 (Let's Encrypt, 10 req/s per IP, 
 - **CPU-only PyTorch.** `pip install -e ".[demo,demo-b0]"` pulls the CUDA build by default. On this server it
   loaded unused GPU libraries, used ~5 GB more disk, and pushed the index out of RAM, so some queries took
   8-60 s. `setup.sh` installs the CPU wheel first.
+- **FAISS index locked in RAM (`lumbr-pin`).** Every query scans the whole 1.13 GB index. Even with CPU torch,
+  only ~0.7 GB of file pages stayed in the active cache, so parts of the index were pushed out and re-read from
+  disk. Batches stalled for 25-30 s, with 23-36% I/O pressure. `vmtouch -l` locks the file in RAM, and
+  `LUMBR_JVM_HEAP=512m` hands ~0.5 GB back to the page cache (Lucene uses mmap, not the heap). After the fix,
+  150 sequential k=1 calls at ~5 req/s all returned in 0.44 s or less.
 - **Warm-up at start.** Right after a start, the first queries paid for random disk reads (up to 60 s).
   `warmup.sh` reads the indexes sequentially and runs 20 queries before systemd marks the service started.
   A cold start takes ~3.5 minutes; after that, queries take ~0.2 s on the server and ~0.3 s end to end.

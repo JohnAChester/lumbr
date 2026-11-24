@@ -1,7 +1,7 @@
 [Unit]
 Description=Lumbr demo search service (B0)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target lumbr-pin.service
+Wants=network-online.target lumbr-pin.service
 
 [Service]
 User=lumbr
@@ -9,7 +9,9 @@ Group=lumbr
 WorkingDirectory=/srv/lumbr/app
 EnvironmentFile=/etc/lumbr/backend.env
 Environment=LUMBR_ARTIFACTS=/srv/lumbr/artifacts
-Environment=LUMBR_JVM_HEAP=1g
+# Lucene reads its index through mmap (page cache), so the heap only holds per-query objects.
+# 512m instead of the 1g default leaves more RAM for the page cache.
+Environment=LUMBR_JVM_HEAP=512m
 Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ExecStart=/srv/lumbr/venv/bin/uvicorn app.main:app --app-dir demo/backend --host 127.0.0.1 --port 8000 --workers 1 --no-server-header
 # Warm the full retrieval path so the first visitor does not wait for the load.
