@@ -279,3 +279,23 @@ def test_save_run_roundtrip(tmp_path):
     assert set(loaded.keys()) == {"q1", "q2"}
     assert loaded["q1"][0] == ["p0", 0.9]
     assert len(loaded["q2"]) == 1
+
+
+def test_save_run_records_a_different_model(tmp_path):
+    subdir = index_rerank.save_run(
+        {"q1": [("p0", 0.5)]}, tmp_path,
+        tag="r1_r4_mini20", split="dev",
+        input_run_dir="r1_r4_rrf_dev_2026-11-23",
+        latency_stats={"median_ms": 1.0, "p95_ms": 2.0, "n_questions": 1},
+        date="2026-11-24",
+        model="cross-encoder/ms-marco-MiniLM-L6-v2",
+    )
+    meta = json.loads((subdir / "meta.json").read_text())
+    assert meta["model"] == "cross-encoder/ms-marco-MiniLM-L6-v2"
+
+
+def test_load_model_defaults_to_the_study_reranker():
+    import inspect
+    sig = inspect.signature(index_rerank.load_model)
+    assert sig.parameters["model_name"].default == index_rerank.RERANKER_MODEL
+    assert sig.parameters["max_length"].default == 1024
