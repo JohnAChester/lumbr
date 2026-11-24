@@ -48,6 +48,10 @@ doesn't load); search 1.86 s median. The chunked numpy cast was the slow part. O
 **FAISS float16 halves the dense search (0.47 s vs 0.9 s) with the identical top 50**, and memory-mapped it holds
 35 MB, so the server uses FAISS.
 
+**Measured with FAISS (Colab parity, full corpus, 2026-11-24): recall@10 0.7657 = the study's, 100 of 100 top-10
+lists identical, search 0.24 s median / 0.34 s p95, process-held memory 1.58 GB (pandas included), mapped
+cache 1.74 GB.** So the server targets the 4 GB plan; confirm memory and latency on the server itself.
+
 **Measuring:** `check_parity.py` reports peak RSS, anonymous memory (what the process really holds) and
 file-backed memory (reclaimable mapped pages) after all 100 dev queries. The plan is chosen from those numbers.
 
