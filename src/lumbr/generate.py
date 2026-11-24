@@ -177,13 +177,36 @@ def _starts_with_line(text: str, line: str, extra: int = ABSTAIN_EXTRA_WORDS) ->
     return j == len(want)
 
 
+ABSTAIN_RULE = 2  # 1: the answer opens with the abstention line; 2: its lead is that line or a refusal
+REFUSAL_PATTERNS = (  # own-words refusals seen in the dev runs (spec 2026-11-23-abstention-detector)
+    r"\bthere is no\b",
+    r"\bno (record|mention|information|single source)\b",
+    r"\bcan(not|'t) answer\b",
+    r"\b(sources|documents) do(es)? not (contain|mention|specify|include|provide|describe)\b",
+)
+_REFUSAL = re.compile("|".join(REFUSAL_PATTERNS))
+_LEAD_END = re.compile(r"\n|(?<=[.!?])\s")
+
+
+def _lead(text: str) -> str:
+    """The answer's lead: up to the first line break or sentence end, whichever comes first."""
+    return _LEAD_END.split(text.strip(), maxsplit=1)[0]
+
+
+def _lead_abstains(text: str, line: str) -> bool:
+    """True if the lead is the abstention line (see _starts_with_line) or an own-words refusal."""
+    lead = _lead(text)
+    return _starts_with_line(lead, line) or bool(_REFUSAL.search(_normalise(lead)))
+
+
 def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
     """Citations mapped back to IDs, out-of-range citation numbers, and whether the answer abstains.
 
-    Accepts [2], [1][3] and [1, 3]. An answer abstains when it starts with the abstention line
-    (normalised, punctuation ignored, up to ABSTAIN_EXTRA_WORDS words inserted, e.g. "that specific
-    information"), even if it then explains what the sources do cover and cites them. A partial
-    answer gives its answer first, so it does not count as an abstention.
+    Accepts [2], [1][3] and [1, 3]. An answer abstains when its lead (first line or sentence) is the
+    abstention line (normalised, punctuation ignored, up to ABSTAIN_EXTRA_WORDS words inserted, e.g.
+    "that specific information") or an own-words refusal matching REFUSAL_PATTERNS ("there is no record
+    of ..."), even if it then explains what the sources do cover and cites them. Citations play no part.
+    A partial answer gives its answer first, so an abstention line later on does not count.
     """
     by_n = {s["n"]: s for s in sources}
     citations: list[dict] = []
@@ -196,16 +219,22 @@ def parse_answer(text: str, sources: list[dict], prompt: dict) -> dict:
                                       "doc_id": by_n[n]["doc_id"]})
             elif n not in invalid:
                 invalid.append(n)
-    abstained = _starts_with_line(text, prompt["abstain"])
+    abstained = _lead_abstains(text, prompt["abstain"])
     return {"citations": citations, "invalid_citations": invalid, "abstained": abstained}
 
 
 # ---------------------------------------------------------------- generation
 
-def make_vllm_chat(llm, sampling_params) -> ChatFn:
-    """ChatFn over a vLLM `LLM` (offline batch chat). Needs vLLM, so it is not unit-tested."""
+def make_vllm_chat(llm, sampling_params, chat_template_kwargs: dict | None = None) -> ChatFn:
+    """ChatFn over a vLLM `LLM` (offline batch chat).
+
+    `chat_template_kwargs` go to the model's chat template, e.g. {"enable_thinking": False} so Qwen3.5
+    answers directly instead of writing out its reasoning first.
+    """
+    extra = {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs else {}
+
     def chat(batch: list[list[dict]]) -> list[dict]:
-        outs = llm.chat(batch, sampling_params, use_tqdm=True)
+        outs = llm.chat(batch, sampling_params, use_tqdm=True, **extra)
         return [{"text": o.outputs[0].text,
                  "prompt_tokens": len(o.prompt_token_ids),
                  "completion_tokens": len(o.outputs[0].token_ids),
@@ -275,14 +304,22 @@ def generate(chat: ChatFn, questions: list[tuple[str, str]],
     return records, wall_s
 
 
-def run_tag(retriever: str, prompt: dict, neighbours: int = NEIGHBOURS) -> str:
+LEGACY_MODEL = "Qwen/Qwen2.5-7B-Instruct"  # #14's runs carry no model in their folder names
+
+
+def run_tag(retriever: str, prompt: dict, neighbours: int = NEIGHBOURS, model: str | None = None) -> str:
     """Run folder tag naming the retriever and prompt version, e.g. `gen_r1_p4`.
 
     A non-default context size is added, e.g. `gen_r1_p4_n0` for the small-to-big ablation
-    (hits only, no neighbours), so it never collides with the default run.
+    (hits only, no neighbours), so it never collides with the default run. Any model other than
+    #14's Qwen2.5-7B-Instruct is added last, e.g. `gen_r1_p4_qwen3.5-9b`.
     """
     tag = f"gen_{retriever}_p{prompt['version']}"
-    return tag if neighbours == NEIGHBOURS else f"{tag}_n{neighbours}"
+    if neighbours != NEIGHBOURS:
+        tag += f"_n{neighbours}"
+    if model and model != LEGACY_MODEL:
+        tag += "_" + model.split("/")[-1].lower()
+    return tag
 
 
 def answers_dir(runs_dir: Path, tag: str, split: str = "dev", date: str | None = None) -> Path:
@@ -308,7 +345,8 @@ def save_answers(records: list[dict], runs_dir: Path, meta: dict, *, tag: str = 
     with open(out / "answers.jsonl", "w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    full_meta = {**meta, "git_commit": git_sha, "date": today, "n_questions": len(records),
+    full_meta = {**meta, "git_commit": git_sha, "date": today, "abstain_rule": ABSTAIN_RULE,
+                 "n_questions": len(records),
                  "n_abstained": sum(r["abstained"] for r in records),
                  "n_invalid_citations": sum(len(r["invalid_citations"]) for r in records),
                  "n_truncated": sum(r.get("finish_reason") == "length" for r in records),
@@ -372,4 +410,6 @@ def summarize(records: list[dict], question_types: dict[str, str],
         "share_sentences_cited": cited_share(records),
         "mean_prompt_tokens": round(sum(t) / len(t), 1) if (t := [r["prompt_tokens"] for r in records
                                                                    if r.get("prompt_tokens")]) else None,
+        # Reasoning that leaked into the answer (thinking should be off); these also break abstention parsing.
+        "think_tags": sum("<think>" in r["answer"] for r in records),
     }

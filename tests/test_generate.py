@@ -436,7 +436,7 @@ def test_summarize_round():
     assert s == {"n": 3, "abstained": 2, "info_not_found_abstained": "1/1",
                  "answerable_abstained_gold_present": 1, "answerable_answered_gold_missing": 1,
                  "answers_with_invalid_citations": 1, "truncated": 1, "share_sentences_cited": 0.5,
-                 "mean_prompt_tokens": 300.0}
+                 "mean_prompt_tokens": 300.0, "think_tags": 0}
 
 
 # ---------------------------------------------------------------- prompt v2: source count
@@ -554,3 +554,96 @@ def test_abstention_must_start_the_answer_even_with_insertions():
 def test_missing_words_are_not_abstention():
     text = "I'm sorry, I can't find that in our database."  # words dropped, not inserted
     assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
+
+
+# ---------------------------------------------------------------- Qwen3.5-9B switch
+
+class _FakeOut:
+    def __init__(self, text):
+        self.prompt_token_ids = [1, 2, 3]
+        self.outputs = [type("O", (), {"text": text, "token_ids": [9], "finish_reason": "stop"})()]
+
+
+class _FakeLLM:
+    def __init__(self):
+        self.kwargs = None
+
+    def chat(self, batch, sampling_params, **kwargs):
+        self.kwargs = kwargs
+        return [_FakeOut("ok") for _ in batch]
+
+
+def test_vllm_chat_passes_chat_template_kwargs():
+    llm = _FakeLLM()
+    out = generate.make_vllm_chat(llm, "sp", chat_template_kwargs={"enable_thinking": False})([[{"role": "user", "content": "x"}]])
+    assert llm.kwargs["chat_template_kwargs"] == {"enable_thinking": False}
+    assert out == [{"text": "ok", "prompt_tokens": 3, "completion_tokens": 1, "finish_reason": "stop"}]
+
+
+def test_vllm_chat_without_template_kwargs_sends_none():
+    llm = _FakeLLM()
+    generate.make_vllm_chat(llm, "sp")([[{"role": "user", "content": "x"}]])
+    assert "chat_template_kwargs" not in llm.kwargs
+
+
+def test_run_tag_names_new_models_and_keeps_legacy_names():
+    prompt = {"version": 4}
+    assert generate.run_tag("r1", prompt) == "gen_r1_p4"
+    assert generate.run_tag("r1", prompt, model="Qwen/Qwen2.5-7B-Instruct") == "gen_r1_p4"   # #14's runs
+    assert generate.run_tag("r1", prompt, model="Qwen/Qwen3.5-9B") == "gen_r1_p4_qwen3.5-9b"
+    assert generate.run_tag("r5_r6", prompt, neighbours=0, model="Qwen/Qwen3.5-9B") == "gen_r5_r6_p4_n0_qwen3.5-9b"
+
+
+def test_summarize_counts_leaked_think_tags():
+    recs = [{"question_id": "q1", "abstained": False, "invalid_citations": [], "finish_reason": "stop",
+             "sources": [], "answer": "<think>" + chr(10) + "hmm</think> It is 5 [1].", "prompt_tokens": 10}]
+    assert generate.summarize(recs, {"q1": "basic"}, {"q1": set()})["think_tags"] == 1
+
+
+# ---------------------------------------------------------------- abstention rule 2: the lead decides
+
+def test_lead_cuts_at_line_break_or_sentence_end():
+    assert generate._lead("Here are the rules:\n* There is no cap [1].") == "Here are the rules:"
+    assert generate._lead("First one. Second one.") == "First one."
+    assert generate._lead("\n\n  Only sentence") == "Only sentence"
+    assert generate._lead("Version 2.5 is out. Next.") == "Version 2.5 is out."
+
+
+def test_refusal_patterns_are_the_spec_list_and_ascii():
+    assert generate.REFUSAL_PATTERNS == (
+        r"\bthere is no\b", r"\bno (record|mention|information|single source)\b",
+        r"\bcan(not|'t) answer\b",
+        r"\b(sources|documents) do(es)? not (contain|mention|specify|include|provide|describe)\b")
+    assert all(p.isascii() for p in generate.REFUSAL_PATTERNS)
+
+
+@pytest.mark.parametrize("text", [
+    "Based on the provided sources, there is no record of a Teams integration. Source [3] covers Slack [3].",
+    "There is no mention of FP8 thresholds in the sources [1].",
+    "I cannot answer that from these sources.",
+    "I can’t answer that from these sources.",
+    "The sources do not specify the queue-depth threshold. The interleaving ratio is 0.6 [1].",
+    "\n\nNo information about that is available [2].",
+])
+def test_own_words_refusal_in_lead_abstains_even_when_citing(text):
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is True
+
+
+@pytest.mark.parametrize("text", [
+    "Here are the requirements:\n* There is no limit on retries [1].\n* Timeouts are 30 s [2].",
+    "The limit is 10 MiB [2]. There is no second limit.",
+    "The rollout date is May 4 [2]. I'm sorry, but I can't find that information in our database.",
+])
+def test_refusal_outside_the_lead_does_not_abstain(text):
+    assert generate.parse_answer(text, _three_sources(), generate.load_prompt())["abstained"] is False
+
+
+def test_negative_fact_answer_counts_as_abstained_by_rule():
+    # Known trade-off (abstention spec): a correct "there is no ..." answer reads as a refusal.
+    got = generate.parse_answer("There is no rate limit on Dedicated [2].", _three_sources(), generate.load_prompt())
+    assert got["abstained"] is True
+
+
+def test_save_records_abstain_rule(tmp_path):
+    out = generate.save_answers(_records(), tmp_path, {"model": "m"}, date="2026-11-24")
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["abstain_rule"] == 2
