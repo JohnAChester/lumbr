@@ -73,6 +73,7 @@ def test_copy_lucene_needs_a_finished_index(tmp_path):
 def test_b0_config():
     c = b0.b0_config(n_passages=10, n_docs=3, model_path="/m/r4_full/final", r4_meta={"x": 1})
     assert c["retriever"] == "B0" and c["lexical"] == "bm25" and c["threshold"] is None
+    assert c["dense_index"] == "faiss_sq_fp16"
     assert c["query_prefix"] == "Represent this sentence for searching relevant passages:"
     assert c["fusion"] == {"method": "rrf", "k": 60, "first_stage_k": 50, "order": ["r1", "r4"]}
     json.dumps(c)

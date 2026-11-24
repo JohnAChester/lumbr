@@ -132,6 +132,8 @@ def test_load_retriever_builds_b0_when_config_names_a_lexical_index(tmp_path, pa
     monkeypatch.setattr(lexical, "LuceneBM25", lambda index_dir: opened.append(index_dir) or OverlapLexical(passages))
     r = artifacts.load_retriever(tmp_path)
     assert r.name == "B0" and r.lexical is not None and opened == [tmp_path / "bm25"]
+    from lumbr_demo.index import FaissDenseIndex
+    assert isinstance(r.index, FaissDenseIndex)  # B0 serves the memory-mapped FAISS fp16 index
 
 
 def test_rrf_ties_go_to_the_bm25_order(store):

@@ -28,7 +28,7 @@ generate = ["vllm<0.34"]
 # the demo search service (demo/backend); its tests run in CI
 demo = ["fastapi>=0.110", "httpx", "numpy", "onnxruntime", "tokenizers", "uvicorn"]
 # the B0 search server: R1 BM25 through Pyserini (needs Java 21+)
-demo-b0 = ["pyserini"]
+demo-b0 = ["pyserini", "faiss-cpu"]
 # building the demo artifacts (demo/build): embeddings + ONNX export
 demo-build = ["sentence-transformers>=3.0", "onnx", "onnxscript"]
 dev = ["pytest"]

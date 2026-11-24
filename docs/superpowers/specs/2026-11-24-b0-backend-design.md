@@ -30,7 +30,7 @@ always on, so the backend loads data lean without giving up any of B0's recall:
 
 | Part | How it's held | Estimate |
 |---|---|---|
-| R4 vectors (772K × 768) | float16 file, memory-mapped, scored in 64K-row float32 chunks | ~1.2 GB of reclaimable OS cache, ~0.2 GB of temporary space per query |
+| R4 vectors (772K × 768) | FAISS float16 index (`dense_sq_fp16.faiss`, built from `embeddings.npy` on first load), memory-mapped | ~1.1 GB of reclaimable OS cache; ~35 MB the process holds |
 | BM25 | Lucene memory-maps its index; JVM heap capped with `-Xmx` (`LUMBR_JVM_HEAP`, default `1g`) | ≤ 1 GB of heap, plus cache |
 | Passage store | SQLite on disk, a few rows read per query | small |
 | R4 query encoder | ONNX in fp32 (int8 would change the query vectors) | ~0.5 GB |
@@ -41,6 +41,12 @@ That's about 2–2.5 GB of memory the process holds, plus cache the OS can drop.
 - Casting float16 to float32 is exact, as the study's `load_index` did, so rankings match the study's.
 - int8 would save about another 0.6 GB of cache, but changes the scores, so it could cost recall.
 - Plan: add int8 only if the 4 GB measurement is tight, and only after the parity check confirms recall.
+
+**Measured (Colab parity, numpy chunked search, 2026-11-24):** recall@10 0.7657 = the study's; 98 of 100 top-10
+lists identical and all 100 the same set; process-held memory 1.7 GB (includes pandas, which the server
+doesn't load); search 1.86 s median. The chunked numpy cast was the slow part. On a laptop with 2 threads,
+**FAISS float16 halves the dense search (0.47 s vs 0.9 s) with the identical top 50**, and memory-mapped it holds
+35 MB, so the server uses FAISS.
 
 **Measuring:** `check_parity.py` reports peak RSS, anonymous memory (what the process really holds) and
 file-backed memory (reclaimable mapped pages) after all 100 dev queries. The plan is chosen from those numbers.

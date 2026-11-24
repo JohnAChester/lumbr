@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 
 from lumbr_demo.encoder import HashEncoder
@@ -76,3 +77,39 @@ def test_chunked_fp16_search_equals_fp32_in_memory(tmp_path):
         got = DenseIndex.load(tmp_path, chunk_rows=chunk).search(q, 50)
         assert [pid for pid, _ in got] == [pid for pid, _ in want], chunk
         assert np.allclose([s for _, s in got], [s for _, s in want], rtol=1e-6, atol=0), chunk
+
+
+# ---------------------------------------------------------------- FAISS fp16, memory-mapped (B0 server)
+
+def test_faiss_index_matches_numpy_and_is_built_once(tmp_path):
+    from lumbr_demo.index import FAISS_FILE, FaissDenseIndex
+    m, ids = _fp16_index(tmp_path, n=3000, dim=16)
+    q = np.random.default_rng(3).standard_normal(16).astype(np.float32)
+    want = DenseIndex(m.astype(np.float32), ids).search(q, 50)
+    idx = FaissDenseIndex.load(tmp_path)
+    assert (tmp_path / FAISS_FILE).exists()
+    got = idx.search(q, 50)
+    assert [pid for pid, _ in got] == [pid for pid, _ in want]
+    assert np.allclose([s for _, s in got], [s for _, s in want], rtol=1e-5, atol=1e-6)
+    built = (tmp_path / FAISS_FILE).stat().st_mtime_ns
+    FaissDenseIndex.load(tmp_path)
+    assert (tmp_path / FAISS_FILE).stat().st_mtime_ns == built  # reused, not rebuilt
+
+
+def test_faiss_index_k_larger_than_index(tmp_path):
+    from lumbr_demo.index import FaissDenseIndex
+    _fp16_index(tmp_path, n=5, dim=4)
+    got = FaissDenseIndex.load(tmp_path).search(np.ones(4, np.float32), 10)
+    assert len(got) == 5 and len({p for p, _ in got}) == 5
+
+
+def test_faiss_index_refuses_stale_file(tmp_path):
+    """A .faiss file with a different row count than ids.json would silently map scores to wrong ids."""
+    import json as _json
+
+    from lumbr_demo.index import FaissDenseIndex
+    _fp16_index(tmp_path, n=50, dim=4)
+    FaissDenseIndex.load(tmp_path)
+    (tmp_path / "ids.json").write_text(_json.dumps([f"x{i}" for i in range(49)]), encoding="utf-8")
+    with pytest.raises(ValueError, match="49"):
+        FaissDenseIndex.load(tmp_path)

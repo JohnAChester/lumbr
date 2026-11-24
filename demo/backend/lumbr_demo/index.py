@@ -59,3 +59,49 @@ class DenseIndex:
         directory = Path(directory)
         matrix = np.load(directory / "embeddings.npy", mmap_mode="r")
         return cls(matrix, json.loads((directory / "ids.json").read_text(encoding="utf-8")), chunk_rows)
+
+
+FAISS_FILE = "dense_sq_fp16.faiss"
+
+
+class FaissDenseIndex:
+    """The B0 server's dense index: a FAISS fp16 scalar-quantizer index, memory-mapped from disk.
+
+    FAISS decodes fp16 to fp32 in SIMD while scoring (exact, like the study's fp16 -> fp32 cast), so it is about
+    twice as fast as the chunked numpy cast and holds almost no process memory (the mapped file is OS cache).
+    The .faiss file is built from embeddings.npy on first load (seconds) and reused after that.
+    """
+
+    def __init__(self, index, ids: list[str]):
+        if index.ntotal != len(ids):
+            raise ValueError(f"{index.ntotal} vectors in the FAISS index but {len(ids)} ids")
+        self.index, self.ids = index, list(ids)
+
+    def search(self, q: np.ndarray, k: int) -> list[tuple[str, float]]:
+        """Top-k (id, cosine) pairs, best first."""
+        scores, rows = self.index.search(np.asarray(q, dtype=np.float32).reshape(1, -1), min(k, len(self.ids)))
+        return [(self.ids[r], float(s)) for s, r in zip(scores[0], rows[0]) if r >= 0]
+
+    @staticmethod
+    def build(directory: Path, chunk_rows: int = CHUNK_ROWS) -> Path:
+        import faiss
+        directory = Path(directory)
+        m = np.load(directory / "embeddings.npy", mmap_mode="r")
+        index = faiss.IndexScalarQuantizer(m.shape[1], faiss.ScalarQuantizer.QT_fp16, faiss.METRIC_INNER_PRODUCT)
+        for start in range(0, m.shape[0], chunk_rows):
+            index.add(np.asarray(m[start:start + chunk_rows], dtype=np.float32))
+        out = directory / FAISS_FILE
+        tmp = out.with_name(out.name + ".partial")
+        faiss.write_index(index, str(tmp))
+        tmp.replace(out)
+        return out
+
+    @classmethod
+    def load(cls, directory: Path) -> "FaissDenseIndex":
+        import faiss
+        directory = Path(directory)
+        path = directory / FAISS_FILE
+        if not path.exists():
+            cls.build(directory)
+        index = faiss.read_index(str(path), faiss.IO_FLAG_MMAP_IFC)
+        return cls(index, json.loads((directory / "ids.json").read_text(encoding="utf-8")))

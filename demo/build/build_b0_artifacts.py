@@ -73,7 +73,7 @@ def copy_lucene(src: Path, dst: Path) -> None:
 
 def b0_config(n_passages: int, n_docs: int, model_path: str, r4_meta: dict) -> dict:
     return {
-        "retriever": "B0", "lexical": "bm25", "threshold": None,
+        "retriever": "B0", "lexical": "bm25", "dense_index": "faiss_sq_fp16", "threshold": None,
         "query_prefix": R4.query_prefix, "model": R4.name, "model_path": model_path, "r4_index_meta": r4_meta,
         "fusion": {"method": "rrf", "k": 60, "first_stage_k": 50, "order": ["r1", "r4"]},
         "n_passages": n_passages, "n_docs": n_docs,
