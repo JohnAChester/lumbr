@@ -598,3 +598,19 @@ def test_summarize_counts_leaked_think_tags():
     recs = [{"question_id": "q1", "abstained": False, "invalid_citations": [], "finish_reason": "stop",
              "sources": [], "answer": "<think>" + chr(10) + "hmm</think> It is 5 [1].", "prompt_tokens": 10}]
     assert generate.summarize(recs, {"q1": "basic"}, {"q1": set()})["think_tags"] == 1
+
+
+def test_candidate_prompt_v6_changes_only_the_exact_question_rule():
+    """Prompt rounds change one thing, so each effect is measurable (notebook 17 header)."""
+    v4 = generate.load_prompt()
+    v6 = generate.load_prompt(generate.PROMPT_PATH.with_name("answer_v6_candidate.json"))
+    assert (v4["version"], v6["version"]) == (4, 6)
+    for key in ("user_template", "source_template", "abstain"):
+        assert v6[key] == v4[key]
+    old, new = v4["system"].split("\n"), v6["system"].split("\n")
+    changed = [i for i, (a, b) in enumerate(zip(old, new)) if a != b]
+    assert len(old) == len(new) and len(changed) == 1
+    rule = new[changed[0]]
+    assert old[changed[0]].startswith("- Answer only if a source answers this exact question")
+    assert "different words" in rule and "more than one source" in rule
+    assert "A source about a related point does not count" in rule  # look-alike guard stays
