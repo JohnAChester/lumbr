@@ -1,0 +1,28 @@
+[Unit]
+Description=Lumbr demo search service (B0)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lumbr
+Group=lumbr
+WorkingDirectory=/srv/lumbr/app
+EnvironmentFile=/etc/lumbr/backend.env
+Environment=LUMBR_ARTIFACTS=/srv/lumbr/artifacts
+Environment=LUMBR_JVM_HEAP=1g
+Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ExecStart=/srv/lumbr/venv/bin/uvicorn app.main:app --app-dir demo/backend --host 127.0.0.1 --port 8000 --workers 1 --no-server-header
+# Warm the full retrieval path so the first visitor does not wait for the load.
+ExecStartPost=/usr/local/lib/lumbr/warmup.sh
+TimeoutStartSec=900
+Restart=always
+SuccessExitStatus=143
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
