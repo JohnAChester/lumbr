@@ -8,7 +8,6 @@ script end to end on a tiny index, and Jieun can prototype question generation.
 from __future__ import annotations
 
 import json
-import subprocess
 
 from lumbr import chunk, data, paths, schema, sources
 
@@ -17,12 +16,9 @@ SAMPLE_DOC_IDS = "sample_doc_ids.txt"
 SAMPLE_MANIFEST = "sample_manifest.json"
 
 
-def code_version() -> str | None:
-    try:
-        return subprocess.run(["git", "-C", str(paths.REPO_ROOT), "rev-parse", "--short", "HEAD"],
-                              capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
+def code_version() -> str:
+    """The git commit recorded in manifests (kept for passages.py and subsample.py)."""
+    return paths.git_commit()
 
 
 def choose_doc_ids(n_docs: int = 1000, n_questions: int = 50, min_per_source: int = 10,

@@ -13,6 +13,7 @@ the LUMBR_DRIVE / LUMBR_LOCAL environment variables.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,6 +69,19 @@ def show() -> None:
                  "LOCAL_ROOT", "LOCAL_RAW"]:
         p = globals()[name]
         print(f"{'[ok]' if p.exists() else '[--]'} {name:<10} {p}")
+
+
+def git_commit() -> str:
+    """Short hash of the repo's HEAD, or "unknown" if git is missing or fails.
+
+    Runs git in the repo itself, not the current directory, so callers outside the repo
+    (the demo backend, a notebook that changed directory) still get the right commit.
+    """
+    try:
+        return subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip() or "unknown"
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 def latest_run(tag_prefix: str, split: str = "dev", runs_dir: Path = RUNS) -> Path:

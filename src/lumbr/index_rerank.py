@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import subprocess
 import time
 from pathlib import Path
 
@@ -30,8 +29,16 @@ RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 
 # ---------------------------------------------------------------- model loading
 
-def load_model(*, device: str | None = None):
-    """Load bge-reranker-v2-m3 as a CrossEncoder in fp16.
+def load_model(
+    model_name: str = RERANKER_MODEL,
+    *,
+    device: str | None = None,
+    max_length: int = 1024,
+):
+    """Load a cross-encoder (default: the study's bge-reranker-v2-m3) in fp16.
+
+    model_name and max_length let the demo try smaller rerankers, e.g.
+    cross-encoder/ms-marco-MiniLM-L6-v2 with max_length=512 (its limit).
 
     Falls back to CPU when CUDA is unavailable. Requires sentence-transformers.
     """
@@ -44,8 +51,8 @@ def load_model(*, device: str | None = None):
     # 1024 covers a ≤512-token passage plus the question with room to spare,
     # avoiding the model's 8 K default which pads every batch to full context length.
     return CrossEncoder(
-        RERANKER_MODEL,
-        max_length=1024,
+        model_name,
+        max_length=max_length,
         device=device,
         automodel_args={"torch_dtype": torch.float16},
     )
@@ -183,6 +190,7 @@ def save_run(
     input_run_dir: Path | str,
     latency_stats: dict,
     date: str | None = None,
+    model: str = RERANKER_MODEL,
 ) -> Path:
     """Save a reranked run to a dated subfolder of runs_dir.
 
@@ -202,14 +210,11 @@ def save_run(
         json.dump(run, f)
     print(f"[{tag}] run saved → {run_path}")
 
-    git_sha = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip() or "unknown"
+    git_sha = paths.git_commit()
 
     meta = {
         "retriever":     tag,
-        "model":         RERANKER_MODEL,
+        "model":         model,
         "input_run":     Path(input_run_dir).name,
         "latency_stats": latency_stats,
         "split":         split,

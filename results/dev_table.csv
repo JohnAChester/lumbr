@@ -1,0 +1,15 @@
+setup,run_folder,git_commit,recall@10,ndcg@10,mrr@10,recall@50
+R1 BM25,r1_bm25_dev_2026-11-21,f5919b5,0.665,0.594,0.611,0.858
+R2 bge-base,r2_dev_2026-11-21,43faec5,0.589,0.494,0.493,0.743
+R3 Qwen3-Embedding-4B,r3_dev_2026-11-22,b172fb4,0.661,0.565,0.578,0.797
+R4 fine-tuned bge-base,r4_dev_2026-11-23,f39f08b,0.614,0.521,0.52,0.729
+"R5 = RRF(R1, R3)",r5_rrf_dev_2026-11-22,49a95c7,0.727,0.632,0.635,0.857
+R1 + rerank,r1_r6_dev_2026-11-22,unknown,0.802,0.7,0.695,0.858
+R3 + rerank,r3_r6_dev_2026-11-22,unknown,0.728,0.65,0.669,0.797
+R5 + rerank (R6),r5_r6_dev_2026-11-22,unknown,0.781,0.685,0.688,0.857
+R2 + rerank,r2_r6_dev_2026-11-23,eee2e84,0.694,0.631,0.64,0.743
+R4 + rerank,r4_r6_dev_2026-11-23,eee2e84,0.686,0.621,0.634,0.729
+R1+R4 RRF,r1_r4_rrf_dev_2026-11-23,eee2e84,0.766,0.65,0.648,0.867
+R1+R4 + rerank,r1_r4_r6_dev_2026-11-23,eee2e84,0.819,0.721,0.718,0.867
+"R5 RRF, depth 100 (experiment)",r5_rrf100_dev_2026-11-24,eee2e84,0.737,0.635,0.636,0.877
+"R5 + rerank, depth 100 (experiment)",r5_100_r6_dev_2026-11-24,eee2e84,0.823,0.725,0.727,0.909

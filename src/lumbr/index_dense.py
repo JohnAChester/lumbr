@@ -23,7 +23,6 @@ from __future__ import annotations
 import datetime
 import importlib.metadata
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,14 +64,14 @@ R3 = ModelConfig(
 )
 
 # R4 — fine-tuned from bge-base-en-v1.5 (Jieun's hard-negative fine-tune, issue #10).
-# Weights live at paths.MODELS / "r4" on Drive; pooling and query prefix are identical to R2.
+# Weights live at paths.MODELS / "r4_full" / "final" on Drive (#15, best epoch); pooling and query prefix are identical to R2.
 # `name` records the base for lineage in meta.json; `model_path` is what load_model loads.
 R4 = ModelConfig(
     name="BAAI/bge-base-en-v1.5",
     index_tag="r4",
     query_prefix="Represent this sentence for searching relevant passages:",
     dtype="fp16",
-    model_path=str(paths.MODELS / "r4"),
+    model_path=str(paths.MODELS / "r4_full" / "final"),
 )
 
 # ---------------------------------------------------------------- paths / constants
@@ -409,10 +408,7 @@ def save_run(
     except importlib.metadata.PackageNotFoundError:
         st_ver = "unknown"
 
-    git_sha = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip() or "unknown"
+    git_sha = paths.git_commit()
 
     meta = {
         "retriever":             config.index_tag,

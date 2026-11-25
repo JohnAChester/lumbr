@@ -30,6 +30,8 @@ src/lumbr/          shared Python code: import this from notebooks
   subsample.py      which docs get indexed: gold + BM25/R2 look-alikes + random fill (#5)
   passages.py       the full passage file for the subsample, resumable (#4)
   survey.py         per-source field survey (#2)
+  generate.py       the fixed answer generator: top-5 passages + neighbours -> cited answer or abstention (#14)
+  prompts/answer.json  the generator prompt; its SHA-256 is recorded in every run (#14)
 notebooks/
   00_template.ipynb             copy this to start a new notebook
   00_setup_and_download.ipynb   one-time data download + sanity checks
@@ -37,7 +39,12 @@ notebooks/
   02_john_chunk_sample.ipynb    build processed/sample_passages.jsonl (#3)
   04_john_subsample_bm25.ipynb  BM25 look-alikes for the subsample, CPU (#5)
   05_john_subsample_r2.ipynb    R2 look-alikes + assemble splits/subsample_doc_ids.txt, GPU (#5)
+  17_john_generator.ipynb       answer generator over the R1 dev run, prompt tuning, GPU (#14)
 splits/             committed ID lists: subsample_doc_ids.txt + manifest (#5)
+demo/
+  backend/          the demo search service: R2 retrieval + the study sources and messages (#18)
+  build/            builds its artifacts, threshold, questions and parse cases (#18)
+  content/          colleague DMs and parse cases for the demo site (#18)
   03_john_full_passages.ipynb   build processed/passages.jsonl (#4)
 docs/
   COLAB_SETUP.md    team setup guide
