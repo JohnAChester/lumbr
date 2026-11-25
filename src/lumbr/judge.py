@@ -39,7 +39,11 @@ from lumbr import paths
 
 # ---------------------------------------------------------------- constants
 
-JUDGE_MODEL = "claude-sonnet-4-6"   # frozen; update requires a cache bust
+JUDGE_MODEL = "claude-sonnet-5-5"   # frozen; update requires a cache bust
+# Current Claude models reject `temperature`, so it isn't sent. Sonnet 5.5 thinks by default and the
+# thinking counts toward max_tokens; "between_tools" turns it off for these tool-free yes/no calls.
+JUDGE_THINKING = {"type": "between_tools"}
+JUDGE_MAX_TOKENS = 256
 CACHE_FILE  = "judge_cache.jsonl"
 BATCH_FILE  = "judge_batches.jsonl"
 
@@ -297,9 +301,10 @@ class JudgeClient:
         self._client = _anthropic.Anthropic(api_key=api_key)
         self.model   = model
 
-    def call_one(self, messages: list[dict], max_tokens: int = 256) -> str:
+    def call_one(self, messages: list[dict], max_tokens: int = JUDGE_MAX_TOKENS) -> str | None:
         """Direct synchronous call. Retries on rate-limit up to MAX_RETRIES.
 
+        Returns the reply text, or None when there is no usable text (see response_text).
         Raises OutOfCredits on billing / auth / exhausted retries.
         """
         import anthropic as _anthropic
@@ -309,10 +314,10 @@ class JudgeClient:
                 resp = self._client.messages.create(
                     model=self.model,
                     max_tokens=max_tokens,
-                    temperature=0,
+                    thinking=JUDGE_THINKING,
                     messages=messages,
                 )
-                return resp.content[0].text
+                return response_text(resp)
             except Exception as exc:
                 if _is_credit_error(exc):
                     raise OutOfCredits(str(exc)) from exc
@@ -333,8 +338,8 @@ class JudgeClient:
                 "custom_id": r["custom_id"],
                 "params": {
                     "model":      self.model,
-                    "max_tokens": 256,
-                    "temperature": 0,
+                    "max_tokens": JUDGE_MAX_TOKENS,
+                    "thinking":   JUDGE_THINKING,
                     "messages":   r["messages"],
                 },
             }
@@ -349,12 +354,31 @@ class JudgeClient:
         return b.processing_status
 
     def batch_results(self, batch_id: str) -> Iterator[dict]:
-        """Yield {custom_id, type, text} for each result."""
+        """Yield {custom_id, type, text} for each result.
+
+        A request that succeeded but has no usable text (a refusal, or cut off at max_tokens)
+        comes back as type "no_text", so collect_batches treats it as failed, not as a "no".
+        """
         for result in self._client.beta.messages.batches.results(batch_id):
             typ  = result.result.type
-            text = (result.result.message.content[0].text
-                    if typ == "succeeded" else None)
+            text = response_text(result.result.message) if typ == "succeeded" else None
+            if typ == "succeeded" and text is None:
+                typ = "no_text"
             yield {"custom_id": result.custom_id, "type": typ, "text": text}
+
+
+def response_text(message) -> str | None:
+    """The reply's text blocks joined, or None when there is nothing to parse.
+
+    None for a refusal (stop_reason "refusal", content may be empty), a reply cut off at
+    max_tokens, or a reply with no text block. The parsers read anything unparseable as "no",
+    so these must never reach them: they would be cached as a wrong verdict and never retried.
+    """
+    if getattr(message, "stop_reason", None) in ("refusal", "max_tokens"):
+        return None
+    parts = [b.text for b in (message.content or []) if getattr(b, "type", None) == "text"]
+    text = "".join(parts).strip()
+    return text or None
 
 
 # ---------------------------------------------------------------- custom_id helpers
@@ -441,10 +465,11 @@ def score_run_direct(
 
         if not cache.has(run_tag, qid, "correct", -1, chash):
             try:
-                text   = client.call_one(msgs_c)
-                result = parse_correctness_response(text)
-                cache.put(run_tag, qid, "correct", -1, chash, result)
+                text = client.call_one(msgs_c)
                 n_calls += 1
+                if text is not None:   # None: no usable reply; left uncached, retried next run
+                    cache.put(run_tag, qid, "correct", -1, chash,
+                              parse_correctness_response(text))
             except OutOfCredits as exc:
                 _print_stop(run_tag, n_calls, exc)
                 raise
@@ -455,10 +480,10 @@ def score_run_direct(
             msgs_f, fhash = fact_messages(cand, fact)
             if not cache.has(run_tag, qid, "fact", i, fhash):
                 try:
-                    text   = client.call_one(msgs_f)
-                    result = parse_fact_response(text)
-                    cache.put(run_tag, qid, "fact", i, fhash, result)
+                    text = client.call_one(msgs_f)
                     n_calls += 1
+                    if text is not None:
+                        cache.put(run_tag, qid, "fact", i, fhash, parse_fact_response(text))
                 except OutOfCredits as exc:
                     _print_stop(run_tag, n_calls, exc)
                     raise

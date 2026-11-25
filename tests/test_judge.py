@@ -682,3 +682,70 @@ def test_ragas_faithfulness_skipped_by_default(tmp_path):
     result = jc.ragas_faithfulness("run1", [_rec_with_sources()], by_pid, cache,
                                    _FakeClient(), ragas=False)
     assert result is None
+
+
+# ---------------------------------------------------------------- unusable replies (Sonnet 5.5)
+
+class _Block:
+    def __init__(self, type, text=""):
+        self.type, self.text = type, text
+
+
+class _Msg:
+    def __init__(self, content, stop_reason="end_turn"):
+        self.content, self.stop_reason = content, stop_reason
+
+
+def test_response_text_joins_text_blocks_and_skips_others():
+    msg = _Msg([_Block("thinking"), _Block("text", '{"aligned": '), _Block("text", '"yes"}')])
+    assert jg.response_text(msg) == '{"aligned": "yes"}'
+
+
+@pytest.mark.parametrize("msg", [
+    _Msg([], stop_reason="refusal"),
+    _Msg([_Block("text", "yes")], stop_reason="refusal"),
+    _Msg([_Block("text", '{"reason": "cut')], stop_reason="max_tokens"),
+    _Msg([_Block("thinking")]),
+    _Msg([_Block("text", "   ")]),
+])
+def test_response_text_none_when_nothing_usable(msg):
+    assert jg.response_text(msg) is None
+
+
+def test_judge_settings_send_no_temperature():
+    assert jg.JUDGE_MODEL == "claude-sonnet-5-5"
+    assert jg.JUDGE_THINKING == {"type": "between_tools"}
+
+
+def test_direct_unusable_reply_is_not_cached_and_retried(tmp_path):
+    class _NoText(_FakeClient):
+        def call_one(self, messages, max_tokens=256):
+            self.calls.append(messages)
+            return None
+
+    cache = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _NoText()
+    n = jg.score_run_direct("run1", [_rec("q1")], {"q1": _q("q1")}, cache, client)
+    assert n == 3                      # 1 correctness + 2 facts, all counted against the budget
+    _, chash = jg.correctness_messages("What is X?", "X is 42.", jg.strip_citations("X is 42 [1]."))
+    assert not cache.has("run1", "q1", "correct", -1, chash)
+    # A later run with a working client fills them in.
+    jg.score_run_direct("run1", [_rec("q1")], {"q1": _q("q1")}, cache, _FakeClient())
+    assert cache.has("run1", "q1", "correct", -1, chash)
+
+
+def test_batch_results_marks_unusable_succeeded_reply_as_no_text():
+    from types import SimpleNamespace as NS
+
+    def res(cid, typ, msg=None):
+        return NS(custom_id=cid, result=NS(type=typ, message=msg))
+
+    sdk_results = [res("a", "succeeded", _Msg([_Block("text", "yes")])),
+                   res("b", "succeeded", _Msg([], stop_reason="refusal")),
+                   res("c", "errored")]
+    client = jg.JudgeClient.__new__(jg.JudgeClient)   # skip __init__: no SDK or key needed
+    client._client = NS(beta=NS(messages=NS(batches=NS(results=lambda bid: iter(sdk_results)))))
+    out = list(client.batch_results("batch-1"))
+    assert out == [{"custom_id": "a", "type": "succeeded", "text": "yes"},
+                   {"custom_id": "b", "type": "no_text", "text": None},
+                   {"custom_id": "c", "type": "errored", "text": None}]
