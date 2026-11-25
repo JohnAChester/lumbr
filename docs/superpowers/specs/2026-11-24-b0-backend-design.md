@@ -55,6 +55,38 @@ cache 1.74 GB.** So the server targets the 4 GB plan; confirm memory and latency
 **Measuring:** `check_parity.py` reports peak RSS, anonymous memory (what the process really holds) and
 file-backed memory (reclaimable mapped pages) after all 100 dev queries. The plan is chosen from those numbers.
 
+**On the server (4 GB Lightsail, 2026-11-24):** the first measurements stalled, with single searches up to 25 s.
+- **Cause:** memory pressure, not CPU. The process held ~1.7 GB, so only ~0.7 GB of the 1.13 GB FAISS index stayed
+  cached, and every query re-read parts of it from disk. CPU never crossed into the burstable zone.
+- **Fix (server session):** lock the FAISS index in RAM (`vmtouch -l`, systemd `lumbr-pin`) and lower
+  `LUMBR_JVM_HEAP` to 512m (Lucene reads its index through mmap, not the heap).
+- **After the fix:** 150 sequential calls, median 0.27 s, p95 0.31 s, max 0.44 s; I/O pressure fell from 14.7% to 0.8%.
+  Rankings are unchanged.
+
+## Similarity threshold (off-topic filter)
+
+The filter reads R4's top cosine. Set **0.36** (John, 2026-11-24) from scores on the live server:
+- **The set:** 40 hand-written, clearly off-topic questions (`demo/content/offtopic_questions.json`).
+- **Compared against:** the 86 answerable dev questions of 300 characters or fewer (8 longer ones skipped: the demo
+  refuses over 300). Dev only.
+- Raw scores: `demo/content/threshold_scores_2026-11-24.json`.
+
+| Threshold | Off-topic blocked | Answerable wrongly blocked |
+|---|---|---|
+| 0.3466 (dev-only rule) | 6 / 40 | 0 / 86 |
+| **0.36** | **9 / 40** | **0 / 86** |
+| 0.38 | 13 / 40 | 2 / 86 |
+| 0.40 | 20 / 40 | 3 / 86 |
+| 0.42 | 31 / 40 | 5 / 86 |
+| 0.46 | 39 / 40 | 18 / 86 |
+
+- **The two groups overlap.** Off-topic questions score up to 0.47 (sourdough starter); answerable ones go down to
+  0.37. So cosine alone can't separate them.
+- **Why 0.36:** it never blocks a real colleague question, which is the worst failure for the demo. An off-topic
+  question that gets through costs one cheap model call, and the model then says it can't find the answer in the
+  documents. That counts toward the daily budget.
+- **A sharper filter** (BM25 score, a small classifier) is future work, only if the play-test shows it's needed.
+
 ## Design
 
 - **`Retriever`** takes an optional `lexical` searcher. With one, it:
