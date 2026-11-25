@@ -707,6 +707,80 @@ def test_citation_support_aggregate_none_when_nothing_cached(tmp_path):
     assert result is None
 
 
+def _window_rec(qid="qst_0001", answer="The launch moved to March per the notes. [1]", abstained=False):
+    """One source whose hit is #001, with neighbours #000 and #002 in its window."""
+    return {"question_id": qid, "answer": answer, "abstained": abstained,
+            "sources": [{"n": 1, "doc_id": "dsid_abc", "passage_ids": ["dsid_abc#001"],
+                         "window_ids": ["dsid_abc#000", "dsid_abc#001", "dsid_abc#002"]}]}
+
+
+def _window_pids():
+    return {f"dsid_abc#00{i}": {**_passage(f"dsid_abc#00{i}", body), "n_chunks": 3}
+            for i, body in enumerate(["Intro text.", "Hit text.", "Launch moved to March."])}
+
+
+def test_alce_judge_sees_the_whole_window_not_only_the_hit():
+    # The supporting text is in a neighbour (#002): the generator saw it, so the judge must too.
+    sents = jc._sentence_passages(_window_rec()["answer"], _window_rec()["sources"], _window_pids())
+    assert len(sents) == 1 and len(sents[0]["passage_texts"]) == 1
+    text = sents[0]["passage_texts"][0]
+    assert text.startswith("[slack] T\n")
+    assert "Intro text." in text and "Hit text." in text and "Launch moved to March." in text
+
+
+def test_alce_unclear_reply_is_not_cached_as_no(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "c.jsonl")
+    client = _FakeClient(responses={"You are a citation": "Not entirely; the passage says..."})
+    assert jc.score_citation_support("run1", [_window_rec()], _window_pids(), cache, client) == 1
+    assert jc.citation_support_counts("run1", [_window_rec()], _window_pids(), cache) == \
+        {"supported": 0, "judged": 0, "checks": 1, "answers": 1}
+
+
+def test_alce_custom_ids_do_not_collide_with_fact_ids():
+    a = jg._make_custom_id("gen_r1_r4_p7", "qst_0001", "alce", 0)
+    assert a != jg._make_custom_id("gen_r1_r4_p7", "qst_0001", "fact", 0)
+    assert jg.CUSTOM_ID_RE.match(a) and jg._parse_custom_id(a) == ("gen_r1_r4_p7", "qst_0001", "alce", 0)
+
+
+def test_alce_sample_is_shared_seeded_and_answered_only():
+    recs = {"a": [_window_rec(f"qst_{i:04d}", abstained=(i % 5 == 0)) for i in range(50)],
+            "b": [_window_rec(f"qst_{i:04d}", abstained=(i % 7 == 0)) for i in range(50)]}
+    s = jc.alce_sample(recs, ["a", "b"], n=10, seed=1)
+    assert len(s) == 10 and s == jc.alce_sample(recs, ["a", "b"], n=10, seed=1)
+    assert all(int(q[-4:]) % 5 and int(q[-4:]) % 7 for q in s)
+
+
+def test_alce_batch_round_trip_with_strict_settle(tmp_path):
+    cache, bp = jg.JudgeCache(tmp_path / "c.jsonl"), tmp_path / "b.jsonl"
+    recs = [_window_rec("qst_0001"),
+            _window_rec("qst_0002", "First claim about the launch date here. [1] Second claim "
+                                    "about the March launch here. [1]")]
+    pids, client = _window_pids(), _FakeBatchClient([])
+    pending = jc.alce_pending("run1", recs, pids, cache)
+    assert len(pending) == 3 and jc.alce_cost(pending)["usd"] < 0.01
+    assert jc.submit_alce_batch("run1", recs, pids, cache, client, bp) == "batch-001"
+    assert jc.alce_batch_ids(bp) == {"batch-001"}
+    replies = {"run1-qst_0001-a0": "yes", "run1-qst_0002-a0": "No.",
+               "run1-qst_0002-a1": "The passage mentions March, so..."}
+    client._batch_results = [{"custom_id": c, "type": "succeeded", "text": t} for c, t in replies.items()]
+    n_new, failed = jg.collect_batches(cache, client, bp, batch_ids=jc.alce_batch_ids(bp))
+    assert n_new == 2 and [r["custom_id"] for r in failed] == ["run1-qst_0002-a1"]
+    assert jg.rejudge_direct(failed, {"run1": recs}, {}, cache, _StrictClient()) == (0, failed)
+    strict = _StrictClient(verdict=True)
+    assert jc.rejudge_alce(failed, {"run1": recs}, pids, cache, strict) == (1, [])
+    assert strict.strict_calls == ["alce"]
+    assert jc.citation_support_counts("run1", recs, pids, cache) == \
+        {"supported": 2, "judged": 3, "checks": 3, "answers": 2}
+    assert jc.submit_alce_batch("run1", recs, pids, cache, client, bp) is None   # all cached
+
+
+def test_collect_only_named_batches(tmp_path):
+    cache, bp, client, qs, recs = _batch_setup(
+        tmp_path, {"c": '{"aligned": "yes"}', "f0": "yes", "f1": "no"})
+    assert jg.collect_batches(cache, client, bp, batch_ids=set()) == (0, [])
+    assert jg.collect_batches(cache, client, bp)[0] == 3
+
+
 def test_ragas_faithfulness_skipped_by_default(tmp_path):
     cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
     by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}

@@ -54,6 +54,7 @@ STRICT_SCHEMAS = {
     "fact":    {"type": "object", "additionalProperties": False, "required": ["supported"],
                 "properties": {"supported": {"type": "string", "enum": ["yes", "no"]}}},
 }
+STRICT_SCHEMAS["alce"] = STRICT_SCHEMAS["fact"]     # citation check: same yes/no reply
 CACHE_FILE  = "judge_cache.jsonl"
 BATCH_FILE  = "judge_batches.jsonl"
 
@@ -446,12 +447,14 @@ CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 def _make_custom_id(run: str, qid: str, metric: str, fact_idx: int) -> str:
-    """`{run}-{qid}-c` for correctness, `{run}-{qid}-f{i}` for fact i, e.g. `gen_r1_p7-qst_0123-f3`.
+    """`{run}-{qid}-c` for correctness, `{run}-{qid}-f{i}` for fact i, `{run}-{qid}-a{i}` for the
+    citation check of cited sentence i (judge_citation), e.g. `gen_r1_p7-qst_0123-f3`.
 
     Run tags and question IDs use only letters, digits and "_", so "-" separates them safely.
     Raises ValueError for anything the API would reject, before any batch is submitted.
     """
-    cid = f"{run}-{qid}-" + ("c" if metric == "correct" else f"f{fact_idx}")
+    kind = {"correct": "c", "fact": f"f{fact_idx}", "alce": f"a{fact_idx}"}[metric]
+    cid = f"{run}-{qid}-{kind}"
     if "-" in run or "-" in qid or not CUSTOM_ID_RE.match(cid):
         raise ValueError(f"custom_id {cid!r} is not valid for the Batches API "
                          "(run tag and question id: letters, digits and _ only; 64 chars max)")
@@ -460,7 +463,9 @@ def _make_custom_id(run: str, qid: str, metric: str, fact_idx: int) -> str:
 
 def _parse_custom_id(custom_id: str) -> tuple[str, str, str, int]:
     run, qid, kind = custom_id.split("-")
-    return (run, qid, "correct", -1) if kind == "c" else (run, qid, "fact", int(kind[1:]))
+    if kind == "c":
+        return run, qid, "correct", -1
+    return run, qid, {"f": "fact", "a": "alce"}[kind[0]], int(kind[1:])
 
 
 # ---------------------------------------------------------------- dry-run
@@ -683,12 +688,15 @@ def collect_batches(
     batch_path: Path,
     *,
     requeue: bool = True,
+    batch_ids: set[str] | None = None,
 ) -> tuple[int, list[dict]]:
     """Collect results from all saved batches.
 
     - Succeeded results are written to the cache.
     - Errored / expired requests are returned as a list (re-queue manually or
       pass requeue=True to have them re-submitted automatically).
+
+    batch_ids: only these batches (default: every batch in the manifest).
 
     Returns (n_new_results, failed_requests).
     """
@@ -716,6 +724,8 @@ def collect_batches(
 
     for b in batches:
         bid = b["batch_id"]
+        if batch_ids is not None and bid not in batch_ids:
+            continue
         try:
             status = client.batch_status(bid)
         except Exception as exc:
@@ -767,7 +777,8 @@ def _read_manifest(batch_path: Path) -> list[dict]:
     return out
 
 
-def reparse_batches(cache: JudgeCache, client, batch_path: Path) -> tuple[int, int, list[dict]]:
+def reparse_batches(cache: JudgeCache, client, batch_path: Path,
+                    batch_ids: set[str] | None = None) -> tuple[int, int, list[dict]]:
     """Re-read every saved batch's replies with the strict parsers and correct the cache.
 
     For verdicts cached by an earlier, looser parser (which scored "Not...", "Note...", and
@@ -782,6 +793,8 @@ def reparse_batches(cache: JudgeCache, client, batch_path: Path) -> tuple[int, i
     n_changed = n_dropped = 0
     unusable: dict[str, dict] = {}
     for b in _read_manifest(batch_path):
+        if batch_ids is not None and b["batch_id"] not in batch_ids:
+            continue
         if client.batch_status(b["batch_id"]) != "ended":
             print(f"[judge] batch {b['batch_id']} hasn't ended; skipped.")
             continue
@@ -826,6 +839,9 @@ def rejudge_direct(reqs: list[dict], records_by_run: dict[str, list[dict]],
         run, qid, metric, fi, h = (req["run"], req["qid"], req["metric"],
                                    req["fact_idx"], req["prompt_hash"])
         if cache.has(run, qid, metric, fi, h):
+            continue
+        if metric not in ("correct", "fact"):      # citation checks: judge_citation.rejudge_alce
+            still.append(req)
             continue
         rec, q = by_qid.get(run, {}).get(qid), questions.get(qid)
         if rec is None or q is None:
