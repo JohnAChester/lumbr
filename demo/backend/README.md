@@ -1,7 +1,7 @@
 # Lumbr demo search service
 
 Serves the "First Day at Redwood" demo (`personal_site`, `/projects/lumbr-enterprise-rag/demo`): retrieval,
-the similarity filter, and the study's own sources + chat messages from `lumbr.generate` (prompt v4,
+the similarity filter, and the study's own sources + chat messages from `lumbr.generate` (prompt v7 since 2026-11-25,
 small-to-big). The site sends those messages to the LLM and parses the answer.
 Design: `docs/superpowers/specs/2026-11-23-interface-skeleton-design.md` (#18).
 
