@@ -749,3 +749,36 @@ def test_batch_results_marks_unusable_succeeded_reply_as_no_text():
     assert out == [{"custom_id": "a", "type": "succeeded", "text": "yes"},
                    {"custom_id": "b", "type": "no_text", "text": None},
                    {"custom_id": "c", "type": "errored", "text": None}]
+
+
+# ---------------------------------------------------------------- batch custom_ids
+
+def test_custom_ids_match_the_batches_api_pattern():
+    # The real run tags and question ids: the API rejected the old "run|||qid|||..." ids.
+    for run in ("gen_r1_p7", "gen_r5_r6_p7_n0", "gen_r1_r4_p7"):
+        for metric, i in (("correct", -1), ("fact", 0), ("fact", 45)):
+            cid = jg._make_custom_id(run, "qst_0123", metric, i)
+            assert jg.CUSTOM_ID_RE.match(cid), cid
+            assert jg._parse_custom_id(cid) == (run, "qst_0123", metric, i)
+
+
+def test_custom_ids_unique_across_runs_and_facts():
+    ids = {jg._make_custom_id(r, q, m, i)
+           for r in ("gen_r1_p7", "gen_r1_p7_n0") for q in ("qst_0001", "qst_0002")
+           for m, i in (("correct", -1), ("fact", 0), ("fact", 1))}
+    assert len(ids) == 2 * 2 * 3
+
+
+@pytest.mark.parametrize("run,qid", [("gen_r1_p7_qwen3.5-9b", "qst_0001"),   # "." and "-"
+                                     ("gen_r1_p7", "q|1"), ("x" * 60, "qst_0001")])
+def test_custom_id_rejects_what_the_api_would(run, qid):
+    with pytest.raises(ValueError):
+        jg._make_custom_id(run, qid, "correct", -1)
+
+
+def test_submitted_batch_ids_are_all_valid(tmp_path):
+    client = _FakeBatchClient([])
+    qs = {"qst_0001": _q("qst_0001")}
+    jg.submit_batch_run("gen_r5_r6_p7_n0", [_rec("qst_0001")], qs,
+                        jg.JudgeCache(tmp_path / "c.jsonl"), client, tmp_path / "b.jsonl")
+    assert client._submitted and all(jg.CUSTOM_ID_RE.match(r["custom_id"]) for r in client._submitted)

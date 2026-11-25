@@ -383,13 +383,26 @@ def response_text(message) -> str | None:
 
 # ---------------------------------------------------------------- custom_id helpers
 
+# The Batches API only accepts custom_ids matching this (no "|", ".", spaces; at most 64 chars).
+CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
 def _make_custom_id(run: str, qid: str, metric: str, fact_idx: int) -> str:
-    return f"{run}|||{qid}|||{metric}|||{fact_idx}"
+    """`{run}-{qid}-c` for correctness, `{run}-{qid}-f{i}` for fact i, e.g. `gen_r1_p7-qst_0123-f3`.
+
+    Run tags and question IDs use only letters, digits and "_", so "-" separates them safely.
+    Raises ValueError for anything the API would reject, before any batch is submitted.
+    """
+    cid = f"{run}-{qid}-" + ("c" if metric == "correct" else f"f{fact_idx}")
+    if "-" in run or "-" in qid or not CUSTOM_ID_RE.match(cid):
+        raise ValueError(f"custom_id {cid!r} is not valid for the Batches API "
+                         "(run tag and question id: letters, digits and _ only; 64 chars max)")
+    return cid
 
 
 def _parse_custom_id(custom_id: str) -> tuple[str, str, str, int]:
-    run, qid, metric, fi = custom_id.split("|||")
-    return run, qid, metric, int(fi)
+    run, qid, kind = custom_id.split("-")
+    return (run, qid, "correct", -1) if kind == "c" else (run, qid, "fact", int(kind[1:]))
 
 
 # ---------------------------------------------------------------- dry-run
@@ -627,7 +640,8 @@ def collect_batches(
                 continue
 
             if res["type"] == "succeeded":
-                run, qid, metric, fi = _parse_custom_id(cid)
+                # The manifest is the source of truth for what each request was.
+                run, qid, metric, fi = req["run"], req["qid"], req["metric"], req["fact_idx"]
                 if cache.has(run, qid, metric, fi, req["prompt_hash"]):
                     continue
                 if metric == "correct":
