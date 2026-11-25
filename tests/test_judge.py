@@ -1,4 +1,4 @@
-"""Unit and resumability tests for src/lumbr/judge.py.
+"""Unit and resumability tests for src/lumbr/judge.py and judge_table.py.
 
 No network calls: all judge calls go through _FakeClient.
 """
@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from lumbr import judge as jg
+from lumbr import judge_table as jt
 
 
 # ---------------------------------------------------------------- helpers / fixtures
@@ -487,3 +488,116 @@ def test_aggregate_hand_computed(tmp_path):
     assert agg["correctness"]  == pytest.approx(2/3, abs=0.001)
     assert agg["completeness"] == pytest.approx(0.5, abs=0.001)
     assert agg["overall"]      == pytest.approx(1/3, abs=0.001)
+
+
+# ---------------------------------------------------------------- Part 2: abstention
+
+def _recs_with_types(specs):
+    """specs: list of (qid, question_type, abstained)."""
+    qs = {qid: {**_q(qid), "question_type": qt} for qid, qt, _ in specs}
+    recs = [_rec(qid, abstained=ab) for qid, _, ab in specs]
+    return recs, qs
+
+
+def test_abstention_metrics_basic():
+    recs, qs = _recs_with_types([
+        ("q1", "info_not_found", True),
+        ("q2", "info_not_found", False),
+        ("q3", "basic",          False),
+        ("q4", "basic",          True),
+    ])
+    m = jt.abstention_metrics(recs, qs)
+    assert m["n_info_not_found"]   == 2
+    assert m["n_answerable"]       == 2
+    assert m["n_abstained_inf"]    == 1
+    assert m["n_abstained_ans"]    == 1
+    assert m["abstention_rate"]    == pytest.approx(0.5)
+    assert m["false_refusal_rate"] == pytest.approx(0.5)
+
+
+def test_abstention_metrics_all_abstained():
+    recs, qs = _recs_with_types([
+        ("q1", "info_not_found", True),
+        ("q2", "info_not_found", True),
+    ])
+    m = jt.abstention_metrics(recs, qs)
+    assert m["abstention_rate"]    == pytest.approx(1.0)
+    assert m["false_refusal_rate"] == pytest.approx(0.0)
+
+
+def test_abstention_metrics_none_abstained():
+    recs, qs = _recs_with_types([
+        ("q1", "basic", False),
+        ("q2", "basic", False),
+    ])
+    m = jt.abstention_metrics(recs, qs)
+    assert m["abstention_rate"]    == pytest.approx(0.0)
+    assert m["false_refusal_rate"] == pytest.approx(0.0)
+
+
+def test_abstention_metrics_by_category():
+    recs, qs = _recs_with_types([
+        ("q1", "info_not_found",  True),
+        ("q2", "conflicting_info", False),
+        ("q3", "conflicting_info", True),
+    ])
+    by_cat = jt.abstention_metrics_by_category(recs, qs)
+    assert "info_not_found"  in by_cat
+    assert "conflicting_info" in by_cat
+    assert by_cat["info_not_found"]["abstention_rate"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------- Part 3: results table
+
+def _abst(abstention_rate=0.8, false_refusal=0.05, n=100):
+    return {
+        "n_total": n, "n_info_not_found": 20, "n_answerable": n - 20,
+        "n_abstained_inf": int(0.8 * 20), "n_abstained_ans": int(false_refusal * (n - 20)),
+        "abstention_rate": abstention_rate, "false_refusal_rate": false_refusal,
+    }
+
+
+def _agg(correctness=0.75, completeness=0.80, overall=0.60, n=100, complete=True):
+    return {"complete": complete, "n": n,
+            "correctness": correctness, "completeness": completeness, "overall": overall}
+
+
+def test_build_table_contains_key_columns():
+    cfg = [{"label": "R1 (BM25)", "agg": _agg(), "abst": _abst()}]
+    md  = jt.build_answer_metrics_table(cfg)
+    assert "Correctness" in md
+    assert "Completeness" in md
+    assert "Overall" in md
+    assert "Abstention" in md
+    assert "False-refusal" in md
+    assert "R1 (BM25)" in md
+
+
+def test_build_table_incomplete_marker():
+    cfg = [{"label": "R1", "agg": _agg(complete=False), "abst": _abst()}]
+    md  = jt.build_answer_metrics_table(cfg)
+    assert "R1 *" in md
+
+
+def test_build_table_none_agg_shows_dashes():
+    cfg = [{"label": "R1", "agg": None, "abst": _abst()}]
+    md  = jt.build_answer_metrics_table(cfg)
+    assert "—" in md
+
+
+def test_build_table_section_breaks():
+    cfg = [
+        {"label": "R1", "agg": _agg(), "abst": _abst()},
+        {"label": "R5", "agg": _agg(), "abst": _abst()},
+    ]
+    md = jt.build_answer_metrics_table(cfg, section_breaks={"R5": "Fusion"})
+    assert "**Fusion**" in md
+
+
+def test_write_answer_metrics_table(tmp_path):
+    p  = tmp_path / "results" / "answer_metrics.md"
+    md = jt.build_answer_metrics_table(
+        [{"label": "R1", "agg": _agg(), "abst": _abst()}])
+    jt.write_answer_metrics_table(md, p)
+    assert p.exists()
+    assert "R1" in p.read_text()
