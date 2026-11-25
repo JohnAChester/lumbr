@@ -22,7 +22,7 @@ plans are linked at the bottom.
 - Search service over the **1K-doc v0 sample** (5,233 passages): R2 (`bge-base-en-v1.5`) through an ONNX encoder that
   matches sentence-transformers (cosine ≥ 0.999, same top 5 on 20 dev questions), ~18 ms per `/retrieve` locally.
 - `/retrieve` returns the top-5 hits, their **small-to-big sources** and the **finished chat messages**, built by
-  `lumbr.generate` itself, so the demo's context and prompt are the study's (prompt v4).
+  `lumbr.generate` itself, so the demo's context and prompt are the study's (prompt v7 since 2026-11-25; v4 before).
 - The site sends those messages to the LLM (temperature 0, 768 tokens, the study's Qwen3.5-9B setting) and parses answers with a TypeScript port of
   `parse_answer`, pinned by `parse_cases.json` exported from the Python tests. `[1, 3]` shows as two chips, out-of-range
   numbers are dropped, and abstentions with up to 2 inserted words count as the canned line.
