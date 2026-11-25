@@ -1,0 +1,684 @@
+"""Unit and resumability tests for src/lumbr/judge.py and judge_table.py.
+
+No network calls: all judge calls go through _FakeClient.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from lumbr import judge as jg
+from lumbr import judge_citation as jc
+from lumbr import judge_table as jt
+
+
+# ---------------------------------------------------------------- helpers / fixtures
+
+class _FakeClient:
+    """Drop-in for JudgeClient: returns scripted responses; can raise after N calls."""
+
+    def __init__(
+        self,
+        responses: dict[str, str] | None = None,
+        *,
+        raise_after: int | None = None,
+        raise_exc: Exception | None = None,
+    ):
+        """responses: {content_prefix: response_text}; default: always "yes"/"aligned".
+        raise_after: raise raise_exc (default OutOfCredits) after this many calls.
+        """
+        self._responses  = responses or {}
+        self._raise_after = raise_after
+        self._raise_exc   = raise_exc or jg.OutOfCredits("fake out of credits")
+        self.calls: list[list[dict]] = []
+
+    def call_one(self, messages: list[dict], max_tokens: int = 256) -> str:
+        self.calls.append(messages)
+        if self._raise_after is not None and len(self.calls) > self._raise_after:
+            raise self._raise_exc
+        # Match by content prefix
+        content = messages[0]["content"]
+        for prefix, resp in self._responses.items():
+            if content.startswith(prefix) or prefix in content:
+                return resp
+        # Default: return JSON "yes" for correctness or plain "yes" for facts
+        return '{"reason": "matches", "aligned": "yes"}'
+
+    # Minimal batch stubs (not under test here — batch tests use _FakeBatchClient below)
+    def submit_batch(self, requests): return "fake-batch-id"
+    def batch_status(self, batch_id): return "ended"
+    def batch_results(self, batch_id): return iter([])
+
+
+class _FakeBatchClient(_FakeClient):
+    """Fake client with controllable batch results."""
+
+    def __init__(self, batch_results: list[dict], **kw):
+        super().__init__(**kw)
+        self._batch_results = batch_results
+        self._submitted: list[dict] = []
+
+    def submit_batch(self, requests):
+        self._submitted = requests
+        return "batch-001"
+
+    def batch_status(self, batch_id):
+        return "ended"
+
+    def batch_results(self, batch_id):
+        return iter(self._batch_results)
+
+
+def _q(qid="q1", question_type="basic"):
+    return {
+        "question": "What is X?",
+        "question_type": question_type,
+        "gold_answer": "X is 42.",
+        "answer_facts": ["X is 42", "X is positive"],
+        "expected_doc_ids": ["dsid_abc"],
+    }
+
+
+def _rec(qid="q1", answer="X is 42 [1].", abstained=False):
+    return {
+        "question_id": qid,
+        "answer": answer,
+        "abstained": abstained,
+        "sources": [{"n": 1, "doc_id": "dsid_abc",
+                     "passage_ids": ["dsid_abc#000"], "window_ids": ["dsid_abc#000"]}],
+    }
+
+
+# ---------------------------------------------------------------- citation stripping
+
+def test_strip_citations_basic():
+    assert jg.strip_citations("X is 42 [1]. Also [2][3].") == "X is 42. Also."
+
+
+def test_strip_citations_comma_form():
+    assert jg.strip_citations("See [1, 3] and [2].") == "See and."
+
+
+def test_strip_citations_preserves_markdown_links():
+    assert jg.strip_citations("See [docs](http://x) [2].") == "See [docs](http://x)."
+
+
+def test_strip_citations_no_citations():
+    assert jg.strip_citations("No citations here.") == "No citations here."
+
+
+# ---------------------------------------------------------------- prompt formatting & hashing
+
+def test_correctness_messages_format():
+    msgs, h = jg.correctness_messages("Q?", "Gold", "Candidate")
+    assert len(msgs) == 1 and msgs[0]["role"] == "user"
+    content = msgs[0]["content"]
+    assert "Q?" in content and "Gold" in content and "Candidate" in content
+    assert len(h) == 16  # 16-char hex hash
+
+
+def test_correctness_messages_hash_changes_with_content():
+    _, h1 = jg.correctness_messages("Q?", "Gold", "A")
+    _, h2 = jg.correctness_messages("Q?", "Gold", "B")
+    assert h1 != h2
+
+
+def test_fact_messages_format():
+    msgs, h = jg.fact_messages("Answer text.", "fact statement")
+    assert "Answer text." in msgs[0]["content"]
+    assert "fact statement" in msgs[0]["content"]
+    assert len(h) == 16
+
+
+# ---------------------------------------------------------------- response parsers
+
+def test_parse_correctness_yes():
+    assert jg.parse_correctness_response('{"reason": "ok", "aligned": "yes"}') is True
+
+
+def test_parse_correctness_no():
+    assert jg.parse_correctness_response('{"reason": "off", "aligned": "no"}') is False
+
+
+def test_parse_correctness_fallback_text():
+    assert jg.parse_correctness_response('"aligned": "yes"') is True
+    assert jg.parse_correctness_response('"aligned": "no"') is False
+
+
+def test_parse_fact_yes():
+    assert jg.parse_fact_response("yes") is True
+    assert jg.parse_fact_response("Yes, the answer is consistent.") is True
+
+
+def test_parse_fact_no():
+    assert jg.parse_fact_response("no") is False
+    assert jg.parse_fact_response("No.") is False
+
+
+# ---------------------------------------------------------------- combined score (ERB formula)
+
+def test_combined_score_correct():
+    assert jg.combined_score(True,  0.5) == pytest.approx(0.5)
+    assert jg.combined_score(True,  1.0) == pytest.approx(1.0)
+
+
+def test_combined_score_incorrect():
+    assert jg.combined_score(False, 0.9) == pytest.approx(0.0)
+    assert jg.combined_score(False, 0.0) == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------- cache
+
+def test_cache_roundtrip(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "cache.jsonl")
+    assert not cache.has("run1", "q1", "correct", -1, "h1")
+    cache.put("run1", "q1", "correct", -1, "h1", True)
+    assert cache.has("run1", "q1", "correct", -1, "h1")
+    assert cache.get("run1", "q1", "correct", -1, "h1")["result"] is True
+
+
+def test_cache_persists_across_reload(tmp_path):
+    p = tmp_path / "cache.jsonl"
+    c1 = jg.JudgeCache(p)
+    c1.put("run1", "q1", "correct", -1, "h1", True)
+    c1.put("run1", "q1", "fact",    0,  "h2", False)
+    c2 = jg.JudgeCache(p)
+    assert c2.has("run1", "q1", "correct", -1, "h1")
+    assert c2.has("run1", "q1", "fact",    0,  "h2")
+    assert not c2.has("run1", "q1", "fact", 1, "h3")
+
+
+def test_cache_survives_corrupt_last_line(tmp_path):
+    p = tmp_path / "cache.jsonl"
+    c = jg.JudgeCache(p)
+    c.put("run1", "q1", "correct", -1, "h1", True)
+    with open(p, "a") as f:
+        f.write("{corrupt\n")   # simulate a crash mid-write
+    c2 = jg.JudgeCache(p)
+    assert c2.has("run1", "q1", "correct", -1, "h1")
+
+
+# ---------------------------------------------------------------- dry run
+
+def test_dry_run_counts(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs    = {"q1": _q("q1")}  # 1 correctness + 2 facts = 3 calls
+    recs  = [_rec("q1")]
+    report = jg.dry_run(["run1"], {"run1": recs}, qs, cache)
+    assert report["run1"]["pending_correct"] == 1
+    assert report["run1"]["pending_facts"]   == 2
+    assert report["run1"]["estimated_calls"] == 3
+    assert report["run1"]["estimated_tokens"] > 0
+
+
+def test_dry_run_respects_cache(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs    = {"q1": _q("q1")}
+    recs  = [_rec("q1")]
+    cand  = jg.strip_citations(recs[0]["answer"])
+    _, chash = jg.correctness_messages(qs["q1"]["question"], qs["q1"]["gold_answer"], cand)
+    cache.put("run1", "q1", "correct", -1, chash, True)
+    report = jg.dry_run(["run1"], {"run1": recs}, qs, cache)
+    assert report["run1"]["pending_correct"] == 0
+    assert report["run1"]["pending_facts"]   == 2
+
+
+def test_dry_run_respects_limit(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs    = {"q1": _q("q1"), "q2": _q("q2")}
+    recs  = [_rec("q1"), _rec("q2")]
+    report = jg.dry_run(["run1"], {"run1": recs}, qs, cache, limit=1)
+    assert report["run1"]["estimated_calls"] == 3   # only q1
+
+
+# ---------------------------------------------------------------- score_run_direct
+
+def test_score_run_direct_calls_and_caches(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient()
+    qs     = {"q1": _q("q1")}
+    recs   = [_rec("q1")]
+    n = jg.score_run_direct("run1", recs, qs, cache, client)
+    # 1 correctness + 2 facts
+    assert n == 3
+    assert len(client.calls) == 3
+    assert cache.has("run1", "q1", "correct", -1,
+                     jg._hash(jg._WHOLISTIC_PROMPT.format(
+                         question="What is X?",
+                         gold_answer="X is 42.",
+                         candidate_answer=jg.strip_citations(recs[0]["answer"])
+                     )))
+
+
+def test_score_run_direct_skips_cached(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient()
+    qs     = {"q1": _q("q1")}
+    recs   = [_rec("q1")]
+    jg.score_run_direct("run1", recs, qs, cache, client)
+    client.calls.clear()
+    n2 = jg.score_run_direct("run1", recs, qs, cache, client)
+    assert n2 == 0
+    assert len(client.calls) == 0   # nothing re-called
+
+
+def test_score_run_direct_max_calls_stops_cleanly(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient()
+    qs     = {"q1": _q("q1"), "q2": _q("q2")}
+    recs   = [_rec("q1"), _rec("q2")]
+    with pytest.raises(jg.BudgetExhausted):
+        jg.score_run_direct("run1", recs, qs, cache, client, max_calls=2)
+    done = cache.count_done("run1")
+    assert done == 2  # exactly 2 cached, budget hit
+
+
+def test_score_run_direct_out_of_credits_stops_cleanly(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient(raise_after=1)   # crash on 2nd call
+    qs     = {"q1": _q("q1")}
+    recs   = [_rec("q1")]
+    with pytest.raises(jg.OutOfCredits):
+        jg.score_run_direct("run1", recs, qs, cache, client)
+    # 1st call succeeded and was cached; 2nd raised before caching
+    assert cache.count_done("run1") == 1
+
+
+# ---------------------------------------------------------------- resumability: re-run matches full run
+
+def test_resume_matches_uninterrupted(tmp_path):
+    """Partial run + resume should equal a complete uninterrupted run."""
+    full_cache    = jg.JudgeCache(tmp_path / "full.jsonl")
+    partial_cache = jg.JudgeCache(tmp_path / "partial.jsonl")
+    full_client   = _FakeClient()
+    partial1      = _FakeClient(raise_after=2)
+    partial2      = _FakeClient()
+
+    qs   = {"q1": _q("q1"), "q2": _q("q2")}
+    recs = [_rec("q1"), _rec("q2")]
+
+    # Full run
+    jg.score_run_direct("run1", recs, qs, full_cache, full_client)
+
+    # Interrupted run + resume
+    with pytest.raises(jg.OutOfCredits):
+        jg.score_run_direct("run1", recs, qs, partial_cache, partial1)
+    jg.score_run_direct("run1", recs, qs, partial_cache, partial2)
+
+    # Results must match
+    full_js    = jg.build_judgements(["run1"], qs, {"run1": recs}, full_cache)
+    partial_js = jg.build_judgements(["run1"], qs, {"run1": recs}, partial_cache)
+    assert {r["question_id"]: (r["correct"], r["facts"]) for r in full_js} == \
+           {r["question_id"]: (r["correct"], r["facts"]) for r in partial_js}
+
+
+# ---------------------------------------------------------------- batch resumability
+
+def test_batch_collect_succeeded_results(tmp_path):
+    batch_path = tmp_path / "batches.jsonl"
+    cache      = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs         = {"q1": _q("q1")}
+    recs       = [_rec("q1")]
+
+    # Build the custom_id as score_run would
+    cand = jg.strip_citations(recs[0]["answer"])
+    msgs_c, chash = jg.correctness_messages(qs["q1"]["question"], qs["q1"]["gold_answer"], cand)
+    cid = jg._make_custom_id("run1", "q1", "correct", -1)
+
+    batch_results = [{"custom_id": cid, "type": "succeeded",
+                      "text": '{"reason":"ok","aligned":"yes"}'}]
+    client = _FakeBatchClient(batch_results)
+
+    bid = jg.submit_batch_run("run1", recs, qs, cache, client, batch_path)
+    assert bid is not None
+
+    n_new, failed = jg.collect_batches(cache, client, batch_path)
+    assert n_new >= 1
+    assert len(failed) == 0
+    assert cache.has("run1", "q1", "correct", -1, chash)
+
+
+def test_batch_errored_requests_are_returned(tmp_path):
+    batch_path = tmp_path / "batches.jsonl"
+    cache      = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs         = {"q1": _q("q1")}
+    recs       = [_rec("q1")]
+    cid        = jg._make_custom_id("run1", "q1", "correct", -1)
+
+    batch_results = [{"custom_id": cid, "type": "errored", "text": None}]
+    client = _FakeBatchClient(batch_results)
+
+    jg.submit_batch_run("run1", recs, qs, cache, client, batch_path)
+    n_new, failed = jg.collect_batches(cache, client, batch_path)
+    assert n_new == 0
+    assert len(failed) == 1
+
+
+def test_batch_no_double_submit_on_rerun(tmp_path):
+    """Collecting a batch should not re-submit already-cached results."""
+    batch_path = tmp_path / "batches.jsonl"
+    cache      = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs         = {"q1": _q("q1")}
+    recs       = [_rec("q1")]
+    cand       = jg.strip_citations(recs[0]["answer"])
+    _, chash   = jg.correctness_messages(
+        qs["q1"]["question"], qs["q1"]["gold_answer"], cand)
+    cid        = jg._make_custom_id("run1", "q1", "correct", -1)
+
+    batch_results = [{"custom_id": cid, "type": "succeeded",
+                      "text": '{"reason":"ok","aligned":"yes"}'}]
+    client = _FakeBatchClient(batch_results)
+
+    jg.submit_batch_run("run1", recs, qs, cache, client, batch_path)
+    n1, _ = jg.collect_batches(cache, client, batch_path)
+    n2, _ = jg.collect_batches(cache, client, batch_path)  # re-run
+    assert n1 >= 1
+    assert n2 == 0   # already cached, nothing new
+
+
+# ---------------------------------------------------------------- build_judgements
+
+def test_build_judgements_format(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient()
+    qs     = {"q1": _q("q1")}
+    recs   = [_rec("q1")]
+    jg.score_run_direct("run1", recs, qs, cache, client)
+    js = jg.build_judgements(["run1"], qs, {"run1": recs}, cache)
+    assert len(js) == 1
+    row = js[0]
+    assert set(row) == {"run", "question_id", "correct", "facts"}
+    assert isinstance(row["correct"], bool)
+    assert isinstance(row["facts"], list)
+    assert all(isinstance(f, bool) for f in row["facts"])
+    assert len(row["facts"]) == len(qs["q1"]["answer_facts"])
+
+
+def test_build_judgements_skips_uncached(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "cache.jsonl")
+    qs    = {"q1": _q("q1")}
+    recs  = [_rec("q1")]
+    js    = jg.build_judgements(["run1"], qs, {"run1": recs}, cache)
+    assert js == []  # nothing cached
+
+
+def test_save_load_judgements_roundtrip(tmp_path):
+    rows = [
+        {"run": "run1", "question_id": "q1", "correct": True,  "facts": [True, False]},
+        {"run": "run1", "question_id": "q2", "correct": False, "facts": [False, False]},
+    ]
+    p = tmp_path / "judgements.jsonl"
+    jg.save_judgements(rows, p)
+    loaded = jg.load_judgements(p)
+    assert loaded == rows
+
+
+# ---------------------------------------------------------------- aggregate
+
+def test_aggregate_hand_computed(tmp_path):
+    """Hand-computed example:
+      q1: correct=True,  facts=[True, True]  → comp=1.0, overall=1.0
+      q2: correct=False, facts=[True, False] → comp=0.5, overall=0.0
+      q3: correct=True,  facts=[False]       → comp=0.0, overall=0.0
+    Mean: correctness=2/3≈0.6667, completeness≈0.5, overall≈1/3≈0.3333
+    """
+    qs = {
+        "q1": {**_q("q1"), "answer_facts": ["f1", "f2"]},
+        "q2": {**_q("q2"), "answer_facts": ["f1", "f2"]},
+        "q3": {**_q("q3"), "answer_facts": ["f1"]},
+    }
+    recs = [_rec("q1"), _rec("q2"), _rec("q3")]
+
+    # Fake client that returns scripted verdicts
+    class _ScriptedClient:
+        RESPONSES = {
+            # question_id → (correct, fact_results)
+            "q1": (True,  [True,  True]),
+            "q2": (False, [True,  False]),
+            "q3": (True,  [False]),
+        }
+        def __init__(self): self._counters = {}
+        def call_one(self, messages, max_tokens=256):
+            # Detect metric from prompt content
+            content = messages[0]["content"]
+            # Find qid by matching question text in prompt
+            for qid, (corr, facts) in self.RESPONSES.items():
+                if f"What is X?" in content:
+                    # Pick based on which call number we're on for this qid
+                    key = qid
+                    break
+            else:
+                return "yes"
+            # Use INDIVIDUAL_FACT_VALIDATOR_PROMPT marker
+            if "Statement" in content:
+                idx = self._counters.get(key, 0)
+                self._counters[key] = idx + 1
+                return "yes" if self.RESPONSES[key][1][idx] else "no"
+            return '{"reason":"ok","aligned":"yes"}' if self.RESPONSES[key][0] else '{"reason":"off","aligned":"no"}'
+
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient(responses={
+        # Will use default "yes" / "aligned yes" — override in aggregate test below
+    })
+    # Directly populate cache with hand-computed values
+    for tag, (correct, facts) in [("run1", (True,  [True,  True])),
+                                   ("run1", (False, [True,  False])),
+                                   ("run1", (True,  [False]))]:
+        pass  # will do below
+
+    # Populate cache manually for deterministic results
+    for qid, (corr, fact_results) in [
+        ("q1", (True,  [True,  True])),
+        ("q2", (False, [True,  False])),
+        ("q3", (True,  [False])),
+    ]:
+        q    = qs[qid]
+        cand = jg.strip_citations(recs[["q1","q2","q3"].index(qid)]["answer"])
+        _, chash = jg.correctness_messages(q["question"], q["gold_answer"], cand)
+        cache.put("run1", qid, "correct", -1, chash, corr)
+        for i, fact in enumerate(q["answer_facts"]):
+            _, fhash = jg.fact_messages(cand, fact)
+            cache.put("run1", qid, "fact", i, fhash, fact_results[i])
+
+    agg = jg.aggregate("run1", qs, recs, cache)
+    assert agg is not None
+    assert agg["n"] == 3
+    assert agg["correctness"]  == pytest.approx(2/3, abs=0.001)
+    assert agg["completeness"] == pytest.approx(0.5, abs=0.001)
+    assert agg["overall"]      == pytest.approx(1/3, abs=0.001)
+
+
+# ---------------------------------------------------------------- Part 2: abstention
+
+def _recs_with_types(specs):
+    """specs: list of (qid, question_type, abstained)."""
+    qs = {qid: {**_q(qid), "question_type": qt} for qid, qt, _ in specs}
+    recs = [_rec(qid, abstained=ab) for qid, _, ab in specs]
+    return recs, qs
+
+
+def test_abstention_metrics_basic():
+    recs, qs = _recs_with_types([
+        ("q1", "info_not_found", True),
+        ("q2", "info_not_found", False),
+        ("q3", "basic",          False),
+        ("q4", "basic",          True),
+    ])
+    m = jt.abstention_metrics(recs, qs)
+    assert m["n_info_not_found"]   == 2
+    assert m["n_answerable"]       == 2
+    assert m["n_abstained_inf"]    == 1
+    assert m["n_abstained_ans"]    == 1
+    assert m["abstention_rate"]    == pytest.approx(0.5)
+    assert m["false_refusal_rate"] == pytest.approx(0.5)
+
+
+def test_abstention_metrics_all_abstained():
+    recs, qs = _recs_with_types([
+        ("q1", "info_not_found", True),
+        ("q2", "info_not_found", True),
+    ])
+    m = jt.abstention_metrics(recs, qs)
+    assert m["abstention_rate"]    == pytest.approx(1.0)
+    assert m["false_refusal_rate"] == pytest.approx(0.0)
+
+
+def test_abstention_metrics_none_abstained():
+    recs, qs = _recs_with_types([
+        ("q1", "basic", False),
+        ("q2", "basic", False),
+    ])
+    m = jt.abstention_metrics(recs, qs)
+    assert m["abstention_rate"]    == pytest.approx(0.0)
+    assert m["false_refusal_rate"] == pytest.approx(0.0)
+
+
+def test_abstention_metrics_by_category():
+    recs, qs = _recs_with_types([
+        ("q1", "info_not_found",  True),
+        ("q2", "conflicting_info", False),
+        ("q3", "conflicting_info", True),
+    ])
+    by_cat = jt.abstention_metrics_by_category(recs, qs)
+    assert "info_not_found"  in by_cat
+    assert "conflicting_info" in by_cat
+    assert by_cat["info_not_found"]["abstention_rate"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------- Part 3: results table
+
+def _abst(abstention_rate=0.8, false_refusal=0.05, n=100):
+    return {
+        "n_total": n, "n_info_not_found": 20, "n_answerable": n - 20,
+        "n_abstained_inf": int(0.8 * 20), "n_abstained_ans": int(false_refusal * (n - 20)),
+        "abstention_rate": abstention_rate, "false_refusal_rate": false_refusal,
+    }
+
+
+def _agg(correctness=0.75, completeness=0.80, overall=0.60, n=100, complete=True):
+    return {"complete": complete, "n": n,
+            "correctness": correctness, "completeness": completeness, "overall": overall}
+
+
+def test_build_table_contains_key_columns():
+    cfg = [{"label": "R1 (BM25)", "agg": _agg(), "abst": _abst()}]
+    md  = jt.build_answer_metrics_table(cfg)
+    assert "Correctness" in md
+    assert "Completeness" in md
+    assert "Overall" in md
+    assert "Abstention" in md
+    assert "False-refusal" in md
+    assert "R1 (BM25)" in md
+
+
+def test_build_table_incomplete_marker():
+    cfg = [{"label": "R1", "agg": _agg(complete=False), "abst": _abst()}]
+    md  = jt.build_answer_metrics_table(cfg)
+    assert "R1 *" in md
+
+
+def test_build_table_none_agg_shows_dashes():
+    cfg = [{"label": "R1", "agg": None, "abst": _abst()}]
+    md  = jt.build_answer_metrics_table(cfg)
+    assert "—" in md
+
+
+def test_build_table_section_breaks():
+    cfg = [
+        {"label": "R1", "agg": _agg(), "abst": _abst()},
+        {"label": "R5", "agg": _agg(), "abst": _abst()},
+    ]
+    md = jt.build_answer_metrics_table(cfg, section_breaks={"R5": "Fusion"})
+    assert "**Fusion**" in md
+
+
+def test_write_answer_metrics_table(tmp_path):
+    p  = tmp_path / "results" / "answer_metrics.md"
+    md = jt.build_answer_metrics_table(
+        [{"label": "R1", "agg": _agg(), "abst": _abst()}])
+    jt.write_answer_metrics_table(md, p)
+    assert p.exists()
+    assert "R1" in p.read_text()
+
+
+# ---------------------------------------------------------------- Part 4: ALCE citation check
+
+def _passage(pid, text):
+    doc = pid.rsplit("#", 1)[0]
+    return {"passage_id": pid, "doc_id": doc, "source": "slack", "title": "T",
+            "channel": "eng", "author": "A", "date": "2026-01-01", "created": None,
+            "chunk_idx": int(pid[-3:]), "n_chunks": 2, "n_tokens": 10,
+            "header": f"[slack] T", "body": text, "text": f"[slack] T\n\n{text}"}
+
+
+def _rec_with_sources(qid="q1",
+                      answer="The document confirms the answer is correct [1]. This other fact is also true.",
+                      abstained=False):
+    return {
+        "question_id": qid,
+        "answer": answer,
+        "abstained": abstained,
+        "sources": [
+            {"n": 1, "doc_id": "dsid_abc", "passage_ids": ["dsid_abc#000"],
+             "window_ids": ["dsid_abc#000"]}
+        ],
+    }
+
+
+def test_sentence_passages_extracts_cited_sentences():
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "passage body")}
+    rec = _rec_with_sources()
+    sents = jc._sentence_passages(rec["answer"], rec["sources"], by_pid)
+    assert len(sents) >= 1
+    assert all(len(s["passage_texts"]) > 0 for s in sents)
+    # Uncited sentence should not appear
+    assert all("Sentence two" not in s["sentence"] or s["passage_texts"] for s in sents)
+
+
+def test_sentence_passages_skips_short_sentences():
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    rec = {**_rec_with_sources(), "answer": "Ok [1]. This is a real sentence here. [1]"}
+    sents = jc._sentence_passages(rec["answer"], rec["sources"], by_pid)
+    # "Ok" < 20 chars → skipped
+    assert all(len(s["sentence"]) >= 20 for s in sents)
+
+
+def test_score_citation_support_calls_and_caches(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient(responses={"You are a citation": "yes"})
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "The answer is 42.")}
+    recs   = [_rec_with_sources("q1",
+              "X is exactly forty-two because of physics. [1] More context supports this claim. [1]")]
+    n = jc.score_citation_support("run1", recs, by_pid, cache, client)
+    assert n >= 1
+    # Re-run should make no new calls
+    n2 = jc.score_citation_support("run1", recs, by_pid, cache, client)
+    assert n2 == 0
+
+
+def test_score_citation_support_skips_abstained(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient()
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    recs   = [_rec_with_sources("q1", abstained=True)]
+    n = jc.score_citation_support("run1", recs, by_pid, cache, client)
+    assert n == 0
+
+
+def test_citation_support_aggregate_none_when_nothing_cached(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    recs   = [_rec_with_sources()]
+    result = jc.citation_support_aggregate("run1", recs, by_pid, cache)
+    assert result is None
+
+
+def test_ragas_faithfulness_skipped_by_default(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    result = jc.ragas_faithfulness("run1", [_rec_with_sources()], by_pid, cache,
+                                   _FakeClient(), ragas=False)
+    assert result is None
