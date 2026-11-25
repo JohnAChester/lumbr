@@ -782,3 +782,54 @@ def test_submitted_batch_ids_are_all_valid(tmp_path):
     jg.submit_batch_run("gen_r5_r6_p7_n0", [_rec("qst_0001")], qs,
                         jg.JudgeCache(tmp_path / "c.jsonl"), client, tmp_path / "b.jsonl")
     assert client._submitted and all(jg.CUSTOM_ID_RE.match(r["custom_id"]) for r in client._submitted)
+
+
+# ---------------------------------------------------------------- no double submission
+
+class _SlowBatchClient(_FakeBatchClient):
+    """Batches stay in_progress until .finish() is called; counts submissions."""
+    def __init__(self, **kw):
+        super().__init__([], **kw)
+        self.status, self.n_submits = "in_progress", 0
+    def submit_batch(self, requests):
+        self.n_submits += 1
+        self._submitted = requests
+        return f"batch-{self.n_submits}"
+    def batch_status(self, batch_id):
+        return self.status
+
+
+def test_rerun_while_batch_in_progress_does_not_resubmit(tmp_path):
+    cache, bp = jg.JudgeCache(tmp_path / "c.jsonl"), tmp_path / "b.jsonl"
+    qs, recs = {"qst_0001": _q("qst_0001")}, [_rec("qst_0001")]
+    client = _SlowBatchClient()
+    assert jg.submit_batch_run("run1", recs, qs, cache, client, bp) == "batch-1"
+    jg.collect_batches(cache, client, bp)                         # still in progress
+    assert jg.submit_batch_run("run1", recs, qs, cache, client, bp) is None
+    assert client.n_submits == 1
+
+
+def test_failed_requests_resubmitted_once_batch_has_ended(tmp_path):
+    cache, bp = jg.JudgeCache(tmp_path / "c.jsonl"), tmp_path / "b.jsonl"
+    qs, recs = {"qst_0001": _q("qst_0001")}, [_rec("qst_0001")]
+    client = _SlowBatchClient()
+    jg.submit_batch_run("run1", recs, qs, cache, client, bp)
+    client.status = "ended"                                        # ended, but nothing succeeded
+    assert jg.submit_batch_run("run1", recs, qs, cache, client, bp) == "batch-2"
+
+
+def test_status_error_counts_as_in_flight(tmp_path):
+    cache, bp = jg.JudgeCache(tmp_path / "c.jsonl"), tmp_path / "b.jsonl"
+    qs, recs = {"qst_0001": _q("qst_0001")}, [_rec("qst_0001")]
+    client = _SlowBatchClient()
+    jg.submit_batch_run("run1", recs, qs, cache, client, bp)
+    client.batch_status = lambda bid: (_ for _ in ()).throw(RuntimeError("network"))
+    assert jg.submit_batch_run("run1", recs, qs, cache, client, bp) is None
+
+
+def test_other_runs_batches_do_not_block(tmp_path):
+    cache, bp = jg.JudgeCache(tmp_path / "c.jsonl"), tmp_path / "b.jsonl"
+    qs, recs = {"qst_0001": _q("qst_0001")}, [_rec("qst_0001")]
+    client = _SlowBatchClient()
+    jg.submit_batch_run("run1", recs, qs, cache, client, bp)
+    assert jg.submit_batch_run("run2", recs, qs, cache, client, bp) == "batch-2"

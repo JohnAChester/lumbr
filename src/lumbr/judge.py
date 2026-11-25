@@ -514,6 +514,32 @@ def _print_stop(run_tag: str, n_calls: int, exc: Exception) -> None:
 
 # ---------------------------------------------------------------- batch scoring
 
+def in_flight_custom_ids(client, batch_path: Path, run_tag: str) -> set[str]:
+    """custom_ids in this run's saved batches that haven't ended yet (status other than "ended").
+
+    A batch whose status can't be read counts as in flight: skipping it costs one more re-run,
+    resubmitting it could pay for the same requests twice.
+    """
+    if not Path(batch_path).exists():
+        return set()
+    ids: set[str] = set()
+    with open(batch_path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                b = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if b.get("run") != run_tag:
+                continue
+            try:
+                ended = client.batch_status(b["batch_id"]) == "ended"
+            except Exception:
+                ended = False
+            if not ended:
+                ids.update(r["custom_id"] for r in b.get("requests", []))
+    return ids
+
+
 def submit_batch_run(
     run_tag: str,
     records: list[dict],
@@ -529,7 +555,12 @@ def submit_batch_run(
 
     Saves the batch_id + request manifest to batch_path (append-only JSONL).
     Returns the batch_id, or None if there is nothing pending.
+
+    Requests already in one of this run's batches that hasn't ended are skipped: they aren't
+    cached until that batch is collected, so without this, re-running the full-run cell while a
+    batch is processing would submit (and pay for) the same requests again.
     """
+    in_flight = in_flight_custom_ids(client, batch_path, run_tag)
     to_score = records[:limit] if limit else records
     pending: list[dict] = []
 
@@ -542,20 +573,22 @@ def submit_batch_run(
         cand = strip_citations(rec.get("answer", ""))
         msgs_c, chash = correctness_messages(
             q["question"], q.get("gold_answer", ""), cand)
-        if not cache.has(run_tag, qid, "correct", -1, chash):
-            cid = _make_custom_id(run_tag, qid, "correct", -1)
+        cid = _make_custom_id(run_tag, qid, "correct", -1)
+        if not cache.has(run_tag, qid, "correct", -1, chash) and cid not in in_flight:
             pending.append({"custom_id": cid, "messages": msgs_c,
                             "metric": "correct", "fact_idx": -1,
                             "prompt_hash": chash, "qid": qid})
 
         for i, fact in enumerate(q.get("answer_facts", [])):
             msgs_f, fhash = fact_messages(cand, fact)
-            if not cache.has(run_tag, qid, "fact", i, fhash):
-                cid = _make_custom_id(run_tag, qid, "fact", i)
+            cid = _make_custom_id(run_tag, qid, "fact", i)
+            if not cache.has(run_tag, qid, "fact", i, fhash) and cid not in in_flight:
                 pending.append({"custom_id": cid, "messages": msgs_f,
                                 "metric": "fact", "fact_idx": i,
                                 "prompt_hash": fhash, "qid": qid})
 
+    if in_flight:
+        print(f"[judge] {run_tag}: {len(in_flight)} requests still processing in an earlier batch; not resubmitted.")
     if max_calls:
         pending = pending[:max_calls]
     if not pending:
