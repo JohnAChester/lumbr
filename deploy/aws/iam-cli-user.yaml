@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Least-privilege IAM user for lumbr CLI and aws-mcp access, replacing root.
+  Grants Lightsail management in us-east-1 for the demo search server, aws login,
+  and self-service password and MFA. Nothing else.
+
+Parameters:
+  UserName:
+    Type: String
+    Default: lumbr-dev
+  Region:
+    Type: String
+    Default: us-east-1
+
+Resources:
+  LightsailOperators:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: lumbr-lightsail-operators
+      ManagedPolicyArns:
+        # Required for `aws login` by a non-root identity.
+        - arn:aws:iam::aws:policy/SignInLocalDevelopmentAccess
+      Policies:
+        - PolicyName: lightsail-demo-server
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: LightsailReadInRegion
+                Effect: Allow
+                Action: lightsail:Get*
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref Region
+              - Sid: LightsailInstanceLifecycleInRegion
+                Effect: Allow
+                Action:
+                  - lightsail:CreateInstances
+                  - lightsail:DeleteInstance
+                  - lightsail:StartInstance
+                  - lightsail:StopInstance
+                  - lightsail:RebootInstance
+                  - lightsail:AllocateStaticIp
+                  - lightsail:AttachStaticIp
+                  - lightsail:DetachStaticIp
+                  - lightsail:ReleaseStaticIp
+                  - lightsail:OpenInstancePublicPorts
+                  - lightsail:PutInstancePublicPorts
+                  - lightsail:CloseInstancePublicPorts
+                  - lightsail:ImportKeyPair
+                  - lightsail:DeleteKeyPair
+                  - lightsail:TagResource
+                  - lightsail:UntagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref Region
+        - PolicyName: self-service-credentials
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadPasswordPolicy
+                Effect: Allow
+                Action:
+                  - iam:GetAccountPasswordPolicy
+                  - iam:ListVirtualMFADevices
+                Resource: "*"
+              - Sid: ManageOwnPasswordAndMFA
+                Effect: Allow
+                Action:
+                  - iam:GetUser
+                  - iam:ChangePassword
+                  - iam:ListMFADevices
+                  - iam:EnableMFADevice
+                  - iam:ResyncMFADevice
+                  - iam:DeactivateMFADevice
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${!aws:username}
+              - Sid: ManageOwnVirtualMFADevice
+                Effect: Allow
+                Action:
+                  - iam:CreateVirtualMFADevice
+                  - iam:DeleteVirtualMFADevice
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:mfa/*
+
+  CliUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref UserName
+      Groups:
+        - !Ref LightsailOperators
+      # No LoginProfile here: the console password is set by hand in the IAM
+      # console so it never lands in a template, stack, or agent context.
+
+Outputs:
+  UserArn:
+    Value: !GetAtt CliUser.Arn

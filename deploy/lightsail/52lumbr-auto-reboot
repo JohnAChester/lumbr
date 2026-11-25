@@ -1,0 +1,6 @@
+// lumbr: apply kernel/libc security fixes by rebooting when needed, at a quiet hour.
+// 09:00 UTC = 4 am US Eastern. After a reboot, lumbr-pin re-locks the FAISS index and
+// lumbr-search warms up (~3.5 min) before serving.
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "09:00";
