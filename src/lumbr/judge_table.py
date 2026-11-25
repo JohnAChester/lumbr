@@ -112,8 +112,10 @@ def _row(
         ov     = _fmt(agg.get("overall"),       pct=True)
 
     n     = agg["n"] if agg else abst["n_total"]
-    abstf = _fmt(abst["abstention_rate"],    pct=True)
-    frr   = _fmt(abst["false_refusal_rate"], pct=True)
+    # A rate over zero questions is undefined, not 0% (e.g. the conflicting_info subset has
+    # no info_not_found questions, so it has no abstention rate).
+    abstf = _fmt(abst["abstention_rate"] if abst.get("n_info_not_found", 1) else None, pct=True)
+    frr   = _fmt(abst["false_refusal_rate"] if abst.get("n_answerable", 1) else None, pct=True)
 
     return f"| {label}{marker} | {n} | {corr} | {comp} | {ov} | {abstf} | {frr} |"
 
@@ -137,25 +139,39 @@ def build_answer_metrics_table(
     Returns the full markdown table as a string.
     """
     sb = section_breaks or {}
-    lines: list[str] = [
-        "# Answer metrics — test split\n",
-        "> \\* = run not fully judged; numbers are partial.\n",
-        "| Run | n | Correctness | Completeness | Overall | Abstention | False-refusal |",
-        "|---|---|---|---|---|---|---|",
-    ]
+    header = ["| Run | n | Correctness | Completeness | Overall | Abstention | False-refusal |",
+              "|---|---|---|---|---|---|---|"]
+    any_partial = any(c.get("agg") and not c["agg"].get("complete", True) for c in run_configs)
+    lines: list[str] = ["# Answer metrics — test split", ""]
+    if any_partial:
+        lines += [r"> \* = run not fully judged; numbers are partial.", ""]
+    # Each section is its own table: a heading line between rows would end a markdown table,
+    # and the rows after it would render as plain text.
+    started = False
     for cfg in run_configs:
         label = cfg["label"]
         if label in sb:
-            lines.append(f"\n**{sb[label]}**\n")
+            if started:
+                lines.append("")
+            lines += [f"**{sb[label]}**", ""] + header
+            started = True
+        elif not started:
+            lines += header
+            started = True
         lines.append(_row(label, cfg.get("agg"), cfg["abst"]))
-        if cfg.get("note"):
-            lines.append(f"> {label}: {cfg['note']}")
-    lines.append(
-        "\nCorrectness, Completeness, and Overall are macro-averages across all "
-        "judged answers (abstentions included). Abstention = share of "
-        "info\\_not\\_found questions where the system abstained (want high). "
-        "False-refusal = share of answerable questions where it abstained (want low).\n"
-    )
+    notes = [f"- {c['label']}: {c['note']}" for c in run_configs if c.get("note")]
+    if notes:
+        lines += [""] + notes
+    lines += [
+        "",
+        "n = answers judged. Correctness, Completeness, and Overall are means over all judged "
+        "answers, abstentions included; Overall = Completeness when the answer is judged "
+        "correct, else 0 (the benchmark's combined score). Abstention = share of "
+        r"info\_not\_found questions where the system abstained (want high). False-refusal = "
+        "share of answerable questions where it abstained (want low). — = undefined (no "
+        "questions of that kind in the row).",
+        "",
+    ]
     return "\n".join(lines)
 
 

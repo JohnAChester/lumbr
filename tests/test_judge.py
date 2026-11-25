@@ -597,6 +597,35 @@ def test_build_table_section_breaks():
     assert "**Fusion**" in md
 
 
+def test_build_table_each_section_is_its_own_table():
+    """A heading between rows ends a markdown table, so each section repeats the header."""
+    cfg = [{"label": l, "agg": _agg(), "abst": _abst()} for l in ("R1", "R5", "A1")]
+    md = jt.build_answer_metrics_table(cfg, section_breaks={"R1": "Main", "A1": "Ablations"})
+    lines = md.splitlines()
+    assert md.count("| Run | n |") == 2
+    for heading in ("**Main**", "**Ablations**"):
+        i = lines.index(heading)
+        assert lines[i + 1] == "" and lines[i + 2].startswith("| Run | n |")
+    # Every row sits directly under a header or another row (no blank line inside a table).
+    for i, ln in enumerate(lines):
+        if ln.startswith(("| R1 ", "| R5 ", "| A1 ")):
+            assert lines[i - 1].startswith("|")
+
+
+def test_build_table_partial_note_only_when_partial():
+    full = jt.build_answer_metrics_table([{"label": "R1", "agg": _agg(), "abst": _abst()}])
+    part = jt.build_answer_metrics_table(
+        [{"label": "R1", "agg": _agg(complete=False), "abst": _abst()}])
+    assert "not fully judged" not in full and "not fully judged" in part
+
+
+def test_build_table_rate_over_no_questions_is_a_dash():
+    abst = {**_abst(), "n_info_not_found": 0, "abstention_rate": 0.0}
+    md = jt.build_answer_metrics_table([{"label": "CI", "agg": _agg(), "abst": abst}])
+    row = next(l for l in md.splitlines() if l.startswith("| CI"))
+    assert row.endswith("| — | 5.0% |")
+
+
 def test_write_answer_metrics_table(tmp_path):
     p  = tmp_path / "results" / "answer_metrics.md"
     md = jt.build_answer_metrics_table(

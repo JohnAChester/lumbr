@@ -8,6 +8,8 @@ data/
 *.jsonl
 # ...except small test fixtures, which are code, not data
 !tests/fixtures/*.jsonl
+# ...and the judge verdicts for #23/#24 (run, question id and yes/no only; no test text)
+!results/judgements.jsonl
 *.faiss
 *.index
 *.npy
