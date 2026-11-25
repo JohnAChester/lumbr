@@ -58,6 +58,9 @@ sudo install -m 644 "$HERE/lumbr-search.service" /etc/systemd/system/lumbr-searc
 sudo systemctl daemon-reload
 sudo systemctl enable lumbr-pin lumbr-search >/dev/null
 
+echo "== automatic security reboots (09:00 UTC = 4 am US Eastern)"
+sudo install -m 644 "$HERE/52lumbr-auto-reboot" /etc/apt/apt.conf.d/52lumbr-auto-reboot
+
 echo "== nginx"
 sudo install -m 644 "$HERE/nginx-ratelimit.conf" /etc/nginx/conf.d/lumbr-ratelimit.conf
 sed "s/api.johnchester.dev/$DOMAIN/" "$HERE/nginx-lumbr.conf" | sudo tee /etc/nginx/sites-available/lumbr >/dev/null
