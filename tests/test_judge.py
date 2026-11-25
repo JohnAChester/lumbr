@@ -44,7 +44,9 @@ class _FakeClient:
         for prefix, resp in self._responses.items():
             if content.startswith(prefix) or prefix in content:
                 return resp
-        # Default: return JSON "yes" for correctness or plain "yes" for facts
+        # Default: JSON "yes" for correctness, plain "yes" for facts (the fact prompt has "## Statement")
+        if "## Statement" in content:
+            return "yes"
         return '{"reason": "matches", "aligned": "yes"}'
 
     # Minimal batch stubs (not under test here — batch tests use _FakeBatchClient below)
@@ -833,3 +835,107 @@ def test_other_runs_batches_do_not_block(tmp_path):
     client = _SlowBatchClient()
     jg.submit_batch_run("run1", recs, qs, cache, client, bp)
     assert jg.submit_batch_run("run2", recs, qs, cache, client, bp) == "batch-2"
+
+
+# ---------------------------------------------------------------- strict verdicts (507 "other" replies)
+
+@pytest.mark.parametrize("text,want", [
+    ("yes", True), ("Yes.", True), ("**Yes**", True), ("> no", False), ("No, it doesn't.", False),
+    ("`yes`", True),
+    ("Not quite: the answer omits it.", None), ("Note: the answer says 42.", None),
+    ("None of the answer covers it.", None), ("The answer states X, so yes.", None),
+    ("Looking at the statement... no.", None), ("", None),
+])
+def test_parse_fact_response_reads_only_a_first_word_yes_or_no(text, want):
+    assert jg.parse_fact_response(text) is want
+
+
+@pytest.mark.parametrize("text,want", [
+    ('{"reason": "ok", "aligned": "yes"}', True),
+    ('```json\n{"reason": "off", "aligned": "no"}\n```', False),
+    ('Here is my verdict: {"reason": "ok", "aligned": "Yes"}', True),
+    ('{"reason": "ok"}', None), ("aligned, mostly", None), ("yes", None),
+])
+def test_parse_correctness_response_needs_an_aligned_field(text, want):
+    assert jg.parse_correctness_response(text) is want
+
+
+def test_cache_drop_survives_reload(tmp_path):
+    cache = jg.JudgeCache(tmp_path / "c.jsonl")
+    cache.put("run1", "q1", "fact", 0, "h", False)
+    cache.drop("run1", "q1", "fact", 0, "h")
+    assert not cache.has("run1", "q1", "fact", 0, "h")
+    assert not jg.JudgeCache(tmp_path / "c.jsonl").has("run1", "q1", "fact", 0, "h")
+    cache.put("run1", "q1", "fact", 0, "h", True)           # re-adding after a drop works
+    assert jg.JudgeCache(tmp_path / "c.jsonl").get("run1", "q1", "fact", 0, "h")["result"] is True
+
+
+def _batch_setup(tmp_path, texts):
+    """Submit run1/qst_0001 (1 correctness + 2 facts) and script the batch replies by custom_id suffix."""
+    cache, bp = jg.JudgeCache(tmp_path / "c.jsonl"), tmp_path / "b.jsonl"
+    qs, recs = {"qst_0001": _q("qst_0001")}, [_rec("qst_0001")]
+    client = _FakeBatchClient([])
+    jg.submit_batch_run("run1", recs, qs, cache, client, bp)
+    client._batch_results = [
+        {"custom_id": r["custom_id"], "type": "succeeded",
+         "text": texts[r["custom_id"].rsplit("-", 1)[1]]}
+        for r in client._submitted]
+    return cache, bp, client, qs, recs
+
+
+def test_collect_treats_no_verdict_as_failed_not_no(tmp_path):
+    cache, bp, client, qs, recs = _batch_setup(
+        tmp_path, {"c": '{"aligned": "yes"}', "f0": "yes", "f1": "The answer says 42, so yes."})
+    n_new, failed = jg.collect_batches(cache, client, bp)
+    assert n_new == 2 and [r["custom_id"] for r in failed] == ["run1-qst_0001-f1"]
+
+
+def test_reparse_fixes_verdicts_cached_by_the_old_parser(tmp_path):
+    cache, bp, client, qs, recs = _batch_setup(
+        tmp_path, {"c": '{"aligned": "yes"}', "f0": "Note: it says 42.", "f1": "yes"})
+    sub = {r["custom_id"]: r for r in client._submitted}
+    # What the old parser cached: "Note..." -> False, and f1 wrongly False too.
+    for cid in ("run1-qst_0001-f0", "run1-qst_0001-f1"):
+        r = sub[cid]
+        cache.put("run1", "qst_0001", "fact", r["fact_idx"], r["prompt_hash"], False)
+    n_changed, n_dropped, unusable = jg.reparse_batches(cache, client, bp)
+    assert (n_changed, n_dropped) == (2, 1)       # correctness added + f1 flipped; f0 dropped
+    assert [r["custom_id"] for r in unusable] == ["run1-qst_0001-f0"]
+    f1 = sub["run1-qst_0001-f1"]
+    assert cache.get("run1", "qst_0001", "fact", 1, f1["prompt_hash"])["result"] is True
+    assert jg.reparse_batches(cache, client, bp)[:2] == (0, 0)   # idempotent
+
+
+class _StrictClient(_FakeClient):
+    def __init__(self, verdict=True):
+        super().__init__()
+        self.verdict, self.strict_calls = verdict, []
+    def call_strict(self, messages, metric, max_tokens=1024):
+        self.strict_calls.append(metric)
+        return self.verdict
+
+
+def test_rejudge_direct_settles_and_tags_strict_verdicts(tmp_path):
+    cache, bp, client, qs, recs = _batch_setup(
+        tmp_path, {"c": '{"aligned": "yes"}', "f0": "Explaining at length...", "f1": "no"})
+    _, _, unusable = jg.reparse_batches(cache, client, bp)
+    strict = _StrictClient(verdict=True)
+    n, still = jg.rejudge_direct(unusable, {"run1": recs}, qs, cache, strict)
+    assert (n, still, strict.strict_calls) == (1, [], ["fact"])
+    f0 = next(r for r in client._submitted if r["custom_id"].endswith("-f0"))
+    entry = cache.get("run1", "qst_0001", "fact", 0, f0["prompt_hash"])
+    assert entry["result"] is True and entry["model"] == jg.STRICT_MODEL_TAG
+    # A later reparse keeps the strict verdict instead of dropping it again.
+    assert jg.reparse_batches(cache, client, bp)[2] == []
+    assert cache.has("run1", "qst_0001", "fact", 0, f0["prompt_hash"])
+
+
+def test_rejudge_direct_leaves_unsettled_and_hash_mismatches(tmp_path):
+    cache, bp, client, qs, recs = _batch_setup(
+        tmp_path, {"c": "no verdict here", "f0": "yes", "f1": "hmm"})
+    _, _, unusable = jg.reparse_batches(cache, client, bp)
+    n, still = jg.rejudge_direct(unusable, {"run1": recs}, qs, cache, _StrictClient(verdict=None))
+    assert n == 0 and len(still) == 2
+    changed = [{**recs[0], "answer": "a different answer"}]   # answer changed since submission
+    n, still = jg.rejudge_direct(unusable, {"run1": changed}, qs, cache, _StrictClient())
+    assert n == 0 and len(still) == 2

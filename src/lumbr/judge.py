@@ -44,6 +44,16 @@ JUDGE_MODEL = "claude-sonnet-5-5"   # frozen; update requires a cache bust
 # thinking counts toward max_tokens; "between_tools" turns it off for these tool-free yes/no calls.
 JUDGE_THINKING = {"type": "between_tools"}
 JUDGE_MAX_TOKENS = 256
+# Fallback for replies the plain call can't settle: same prompt, reply forced to this JSON.
+STRICT_MAX_TOKENS = 1024
+STRICT_MODEL_TAG  = "claude-sonnet-5-5+json-schema"   # cache "model" field for these verdicts
+STRICT_SCHEMAS = {
+    "correct": {"type": "object", "additionalProperties": False, "required": ["reason", "aligned"],
+                "properties": {"reason": {"type": "string"},
+                               "aligned": {"type": "string", "enum": ["yes", "no"]}}},
+    "fact":    {"type": "object", "additionalProperties": False, "required": ["supported"],
+                "properties": {"supported": {"type": "string", "enum": ["yes", "no"]}}},
+}
 CACHE_FILE  = "judge_cache.jsonl"
 BATCH_FILE  = "judge_batches.jsonl"
 
@@ -169,28 +179,47 @@ def fact_messages(answer: str, fact: str) -> tuple[list[dict], str]:
 
 # ---------------------------------------------------------------- response parsers
 
-def parse_correctness_response(text: str) -> bool:
-    """Parse {"aligned": "yes"/"no"} JSON from the correctness judge."""
+# First word of a reply, past leading markdown and punctuation ("**Yes**", "> No", "`yes`").
+_FIRST_WORD = re.compile(r"^[\s*_`#>\"'(\[]*([a-z]+)")
+_ALIGNED    = re.compile(r'"aligned"\s*:\s*"\s*(yes|no)\b')
+
+
+def _yes_no(word: str | None) -> bool | None:
+    return True if word == "yes" else False if word == "no" else None
+
+
+def parse_verdict(metric: str, text: str | None) -> bool | None:
+    """The verdict for either metric, or None when the reply has none."""
+    if text is None:
+        return None
+    return parse_correctness_response(text) if metric == "correct" else parse_fact_response(text)
+
+
+def parse_correctness_response(text: str) -> bool | None:
+    """{"aligned": "yes"/"no"} from the correctness judge -> True/False; None if there's no verdict.
+
+    None (not False) for anything else, so an unparseable reply is retried, never scored "no".
+    """
     text = text.strip()
-    # Try JSON first
     try:
         m = json.loads(text)
-        return str(m.get("aligned", "")).lower().strip() == "yes"
+        if isinstance(m, dict):
+            return _yes_no(str(m.get("aligned", "")).strip().lower())
     except (json.JSONDecodeError, ValueError):
         pass
-    # Fallback: scan for yes/no
-    low = text.lower()
-    if '"aligned": "yes"' in low or '"aligned":"yes"' in low:
-        return True
-    if '"aligned": "no"' in low or '"aligned":"no"' in low:
-        return False
-    return "yes" in low and "no" not in low
+    hit = _ALIGNED.search(text.lower())   # JSON inside a code fence or after a sentence
+    return _yes_no(hit.group(1)) if hit else None
 
 
-def parse_fact_response(text: str) -> bool:
-    """Parse simple yes/no from the fact validator."""
-    low = text.strip().lower()
-    return low.startswith("yes")
+def parse_fact_response(text: str) -> bool | None:
+    """The fact validator's yes/no -> True/False, read from the first word only; None otherwise.
+
+    The prompt asks for a bare yes or no. A reply that explains first ("The answer states...")
+    or starts "Not"/"Note"/"None" has no clear verdict: None, so it's retried rather than
+    counted as "no" (which `startswith("no")` used to do for "Not..." and "Note...").
+    """
+    m = _FIRST_WORD.match(text.strip().lower())
+    return _yes_no(m.group(1)) if m else None
 
 
 # ---------------------------------------------------------------- cache
@@ -218,7 +247,10 @@ class JudgeCache:
                     continue
                 try:
                     entry = json.loads(line)
-                    self._mem[self._make_key(entry)] = entry
+                    if entry.get("dropped"):          # tombstone written by drop()
+                        self._mem.pop(self._make_key(entry), None)
+                    else:
+                        self._mem[self._make_key(entry)] = entry
                 except (json.JSONDecodeError, KeyError):
                     pass   # skip corrupt last-line from crash
 
@@ -252,6 +284,16 @@ class JudgeCache:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             f.flush()
         self._mem[self._make_key(entry)] = entry
+
+    def drop(self, run: str, qid: str, metric: str, fact_idx: int, prompt_hash: str) -> None:
+        """Forget a cached verdict (append-only: writes a tombstone that _load honours)."""
+        entry = {"run": run, "qid": qid, "metric": metric, "fact_idx": fact_idx,
+                 "prompt_hash": prompt_hash, "dropped": True,
+                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            f.flush()
+        self._mem.pop(self._make_key(entry), None)
 
     def count_done(self, run: str) -> int:
         return sum(1 for e in self._mem.values() if e["run"] == run)
@@ -301,23 +343,13 @@ class JudgeClient:
         self._client = _anthropic.Anthropic(api_key=api_key)
         self.model   = model
 
-    def call_one(self, messages: list[dict], max_tokens: int = JUDGE_MAX_TOKENS) -> str | None:
-        """Direct synchronous call. Retries on rate-limit up to MAX_RETRIES.
-
-        Returns the reply text, or None when there is no usable text (see response_text).
-        Raises OutOfCredits on billing / auth / exhausted retries.
-        """
-        import anthropic as _anthropic
-
+    def _create(self, **params):
+        """messages.create with the judge's model and thinking. Retries on rate-limit up to
+        MAX_RETRIES; raises OutOfCredits on billing / auth / exhausted retries."""
         for attempt in range(MAX_RETRIES + 1):
             try:
-                resp = self._client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    thinking=JUDGE_THINKING,
-                    messages=messages,
-                )
-                return response_text(resp)
+                return self._client.messages.create(
+                    model=self.model, thinking=JUDGE_THINKING, **params)
             except Exception as exc:
                 if _is_credit_error(exc):
                     raise OutOfCredits(str(exc)) from exc
@@ -326,6 +358,32 @@ class JudgeClient:
                     continue
                 raise OutOfCredits(f"API error after {attempt + 1} attempts: {exc}") from exc
         raise OutOfCredits(f"Rate limit not resolved after {MAX_RETRIES} retries.")
+
+    def call_one(self, messages: list[dict], max_tokens: int = JUDGE_MAX_TOKENS) -> str | None:
+        """Direct synchronous call. Returns the reply text, or None when there is no usable
+        text (see response_text). Raises OutOfCredits on billing / auth / exhausted retries."""
+        return response_text(self._create(max_tokens=max_tokens, messages=messages))
+
+    def call_strict(self, messages: list[dict], metric: str,
+                    max_tokens: int = STRICT_MAX_TOKENS) -> bool | None:
+        """Same prompt, but the reply is forced to STRICT_SCHEMAS[metric] (structured outputs).
+
+        For the few replies the plain call can't settle (explained instead of answering, or ran
+        past max_tokens). The benchmark's prompt text is unchanged; only the reply format is
+        enforced. Returns True/False, or None if there's still no verdict (e.g. a refusal).
+        """
+        resp = self._create(max_tokens=max_tokens, messages=messages,
+                            output_config={"format": {"type": "json_schema",
+                                                      "schema": STRICT_SCHEMAS[metric]}})
+        text = response_text(resp)
+        if text is None:
+            return None
+        try:
+            reply = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        key = "aligned" if metric == "correct" else "supported"
+        return _yes_no(str(reply.get(key, "")).strip().lower())
 
     def submit_batch(
         self, requests: list[dict]
@@ -480,9 +538,10 @@ def score_run_direct(
             try:
                 text = client.call_one(msgs_c)
                 n_calls += 1
-                if text is not None:   # None: no usable reply; left uncached, retried next run
-                    cache.put(run_tag, qid, "correct", -1, chash,
-                              parse_correctness_response(text))
+                # None (no reply text, or no verdict in it): left uncached, retried next run.
+                verdict = parse_correctness_response(text) if text is not None else None
+                if verdict is not None:
+                    cache.put(run_tag, qid, "correct", -1, chash, verdict)
             except OutOfCredits as exc:
                 _print_stop(run_tag, n_calls, exc)
                 raise
@@ -495,8 +554,9 @@ def score_run_direct(
                 try:
                     text = client.call_one(msgs_f)
                     n_calls += 1
-                    if text is not None:
-                        cache.put(run_tag, qid, "fact", i, fhash, parse_fact_response(text))
+                    verdict = parse_fact_response(text) if text is not None else None
+                    if verdict is not None:
+                        cache.put(run_tag, qid, "fact", i, fhash, verdict)
                 except OutOfCredits as exc:
                     _print_stop(run_tag, n_calls, exc)
                     raise
@@ -677,21 +737,116 @@ def collect_batches(
                 run, qid, metric, fi = req["run"], req["qid"], req["metric"], req["fact_idx"]
                 if cache.has(run, qid, metric, fi, req["prompt_hash"]):
                     continue
-                if metric == "correct":
-                    result = parse_correctness_response(res["text"])
-                else:
-                    result = parse_fact_response(res["text"])
+                result = parse_verdict(metric, res["text"])
+                if result is None:            # ran, but no yes/no verdict in the reply
+                    failed.append(req)
+                    continue
                 cache.put(run, qid, metric, fi, req["prompt_hash"], result)
                 n_new += 1
             else:
                 failed.append(req)
 
     if failed:
-        print(f"[judge] {len(failed)} errored/expired batch requests.")
+        print(f"[judge] {len(failed)} batch requests without a usable verdict "
+              "(errored, expired, cut off, or no yes/no): rejudge_direct() retries them.")
     return n_new, failed
 
 
 # ---------------------------------------------------------------- building output
+
+def _read_manifest(batch_path: Path) -> list[dict]:
+    if not Path(batch_path).exists():
+        return []
+    out = []
+    with open(batch_path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+def reparse_batches(cache: JudgeCache, client, batch_path: Path) -> tuple[int, int, list[dict]]:
+    """Re-read every saved batch's replies with the strict parsers and correct the cache.
+
+    For verdicts cached by an earlier, looser parser (which scored "Not...", "Note...", and
+    replies that explained instead of answering as "no"). Results stay downloadable for a while
+    after a batch ends, so this costs nothing. Verdicts already settled by rejudge_direct
+    (STRICT_MODEL_TAG) are kept.
+
+    Returns (n_changed, n_dropped, unusable): changed = cached verdict replaced by the strict
+    parse; dropped = cached verdict removed because the reply has no clear yes/no; unusable =
+    manifest requests to pass to rejudge_direct.
+    """
+    n_changed = n_dropped = 0
+    unusable: dict[str, dict] = {}
+    for b in _read_manifest(batch_path):
+        if client.batch_status(b["batch_id"]) != "ended":
+            print(f"[judge] batch {b['batch_id']} hasn't ended; skipped.")
+            continue
+        reqs = {r["custom_id"]: r for r in b.get("requests", [])}
+        for res in client.batch_results(b["batch_id"]):
+            req = reqs.get(res["custom_id"])
+            if req is None:
+                continue
+            key = (req["run"], req["qid"], req["metric"], req["fact_idx"], req["prompt_hash"])
+            cached = cache.get(*key)
+            if cached and cached.get("model") == STRICT_MODEL_TAG:
+                unusable.pop(res["custom_id"], None)
+                continue
+            verdict = (parse_verdict(req["metric"], res["text"])
+                       if res["type"] == "succeeded" else None)
+            if verdict is None:
+                if cached:
+                    cache.drop(*key)
+                    n_dropped += 1
+                unusable[res["custom_id"]] = req
+            else:
+                unusable.pop(res["custom_id"], None)   # a later batch settled it
+                if cached is None or cached["result"] != verdict:
+                    cache.put(*key, verdict)
+                    n_changed += 1
+    return n_changed, n_dropped, list(unusable.values())
+
+
+def rejudge_direct(reqs: list[dict], records_by_run: dict[str, list[dict]],
+                   questions: dict[str, dict], cache: JudgeCache,
+                   client) -> tuple[int, list[dict]]:
+    """Re-ask unusable requests one by one with client.call_strict (forced yes/no JSON).
+
+    Rebuilds each prompt from the answer records and checks its hash against the manifest, so a
+    changed answer or prompt is never scored under the old key. Returns (n_settled,
+    still_unusable). Raises OutOfCredits like the other paths; re-running continues where it
+    stopped, since settled verdicts are cached.
+    """
+    by_qid = {run: {r["question_id"]: r for r in recs} for run, recs in records_by_run.items()}
+    n_done, still = 0, []
+    for req in reqs:
+        run, qid, metric, fi, h = (req["run"], req["qid"], req["metric"],
+                                   req["fact_idx"], req["prompt_hash"])
+        if cache.has(run, qid, metric, fi, h):
+            continue
+        rec, q = by_qid.get(run, {}).get(qid), questions.get(qid)
+        if rec is None or q is None:
+            still.append(req)
+            continue
+        cand = strip_citations(rec.get("answer", ""))
+        if metric == "correct":
+            msgs, hh = correctness_messages(q["question"], q.get("gold_answer", ""), cand)
+        else:
+            msgs, hh = fact_messages(cand, q["answer_facts"][fi])
+        if hh != h:
+            still.append(req)
+            continue
+        verdict = client.call_strict(msgs, metric)
+        if verdict is None:
+            still.append(req)
+            continue
+        cache.put(run, qid, metric, fi, h, verdict, model=STRICT_MODEL_TAG)
+        n_done += 1
+    return n_done, still
+
 
 def build_judgements(
     run_tags: list[str],
