@@ -31,6 +31,8 @@ demo = ["fastapi>=0.110", "httpx", "numpy", "onnxruntime", "tokenizers", "uvicor
 demo-b0 = ["pyserini", "faiss-cpu"]
 # building the demo artifacts (demo/build): embeddings + ONNX export
 demo-build = ["sentence-transformers>=3.0", "onnx", "onnxscript"]
+# the #23 answer judge (notebook 24): Claude via the Messages and Batches APIs
+judge = ["anthropic"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
