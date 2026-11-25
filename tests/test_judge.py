@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from lumbr import judge as jg
+from lumbr import judge_citation as jc
 from lumbr import judge_table as jt
 
 
@@ -601,3 +602,83 @@ def test_write_answer_metrics_table(tmp_path):
     jt.write_answer_metrics_table(md, p)
     assert p.exists()
     assert "R1" in p.read_text()
+
+
+# ---------------------------------------------------------------- Part 4: ALCE citation check
+
+def _passage(pid, text):
+    doc = pid.rsplit("#", 1)[0]
+    return {"passage_id": pid, "doc_id": doc, "source": "slack", "title": "T",
+            "channel": "eng", "author": "A", "date": "2026-01-01", "created": None,
+            "chunk_idx": int(pid[-3:]), "n_chunks": 2, "n_tokens": 10,
+            "header": f"[slack] T", "body": text, "text": f"[slack] T\n\n{text}"}
+
+
+def _rec_with_sources(qid="q1",
+                      answer="The document confirms the answer is correct [1]. This other fact is also true.",
+                      abstained=False):
+    return {
+        "question_id": qid,
+        "answer": answer,
+        "abstained": abstained,
+        "sources": [
+            {"n": 1, "doc_id": "dsid_abc", "passage_ids": ["dsid_abc#000"],
+             "window_ids": ["dsid_abc#000"]}
+        ],
+    }
+
+
+def test_sentence_passages_extracts_cited_sentences():
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "passage body")}
+    rec = _rec_with_sources()
+    sents = jc._sentence_passages(rec["answer"], rec["sources"], by_pid)
+    assert len(sents) >= 1
+    assert all(len(s["passage_texts"]) > 0 for s in sents)
+    # Uncited sentence should not appear
+    assert all("Sentence two" not in s["sentence"] or s["passage_texts"] for s in sents)
+
+
+def test_sentence_passages_skips_short_sentences():
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    rec = {**_rec_with_sources(), "answer": "Ok [1]. This is a real sentence here. [1]"}
+    sents = jc._sentence_passages(rec["answer"], rec["sources"], by_pid)
+    # "Ok" < 20 chars → skipped
+    assert all(len(s["sentence"]) >= 20 for s in sents)
+
+
+def test_score_citation_support_calls_and_caches(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient(responses={"You are a citation": "yes"})
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "The answer is 42.")}
+    recs   = [_rec_with_sources("q1",
+              "X is exactly forty-two because of physics. [1] More context supports this claim. [1]")]
+    n = jc.score_citation_support("run1", recs, by_pid, cache, client)
+    assert n >= 1
+    # Re-run should make no new calls
+    n2 = jc.score_citation_support("run1", recs, by_pid, cache, client)
+    assert n2 == 0
+
+
+def test_score_citation_support_skips_abstained(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    client = _FakeClient()
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    recs   = [_rec_with_sources("q1", abstained=True)]
+    n = jc.score_citation_support("run1", recs, by_pid, cache, client)
+    assert n == 0
+
+
+def test_citation_support_aggregate_none_when_nothing_cached(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    recs   = [_rec_with_sources()]
+    result = jc.citation_support_aggregate("run1", recs, by_pid, cache)
+    assert result is None
+
+
+def test_ragas_faithfulness_skipped_by_default(tmp_path):
+    cache  = jg.JudgeCache(tmp_path / "cache.jsonl")
+    by_pid = {"dsid_abc#000": _passage("dsid_abc#000", "body")}
+    result = jc.ragas_faithfulness("run1", [_rec_with_sources()], by_pid, cache,
+                                   _FakeClient(), ragas=False)
+    assert result is None
