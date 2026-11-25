@@ -108,7 +108,9 @@ def permutation_p(
 
     For each resample, independently flips the sign of each per-question
     difference (±1 Rademacher variables), then measures the mean.
-    p-value = proportion of resamples where |perm_mean| ≥ |obs_mean| − eps.
+    p-value = (count + 1) / (n_resamples + 1), where count is the number of
+    resamples with |perm_mean| ≥ |obs_mean| − eps. The +1 counts the observed
+    data as one of the permutations, so p is never exactly 0.
 
     Args:
         scores_a, scores_b: equal-length per-question score arrays.
@@ -116,7 +118,7 @@ def permutation_p(
         seed: RNG seed for reproducibility.
 
     Returns:
-        p-value in [0, 1]
+        p-value in (0, 1]
     """
     if len(scores_a) != len(scores_b):
         raise ValueError(
@@ -131,7 +133,8 @@ def permutation_p(
     signs      = rng.choice([-1.0, 1.0], size=(n_resamples, n))
     perm_means = (signs * diff).mean(axis=1)
 
-    return float((np.abs(perm_means) >= abs(obs) - 1e-10).mean())
+    count = int((np.abs(perm_means) >= abs(obs) - 1e-10).sum())
+    return (count + 1) / (n_resamples + 1)
 
 
 def holm_correction(p_values: list[float]) -> list[float]:

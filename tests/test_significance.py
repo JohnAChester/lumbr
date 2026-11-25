@@ -35,6 +35,16 @@ def test_permutation_clear_difference_small_p():
     assert p < 0.001, f"Expected p < 0.001 for a clear difference but got {p}"
 
 
+def test_permutation_p_never_zero():
+    # No sign-flip resample reaches the observed mean of 1.0, so count = 0
+    # and p = (0 + 1) / (n_resamples + 1).
+    a = np.ones(50)
+    b = np.zeros(50)
+    p = permutation_p(a, b, n_resamples=999)
+    assert p > 0.0
+    assert p == pytest.approx(1 / 1000)
+
+
 def test_holm_correction_basic():
     # 3 raw p-values: [0.04, 0.01, 0.05]
     # Sorted ascending: 0.01 (idx 1), 0.04 (idx 0), 0.05 (idx 2)
